@@ -121,6 +121,22 @@ inline Graph PlaceDevice(Graph graph,
   return ApplyPass(std::move(graph), "PlaceDevice");
 }
 
+inline Graph SplitDistributedGraph(
+    Graph graph, const AddressVector& address_vec,
+    const ShapeVector& shape_vec, const DTypeVector& dtype_vec,
+    const std::string& device_copy_op, const std::string& p2pnet_init_op,
+    const std::string& p2pnet_send_op, const std::string& p2pnet_recv_op) {
+  graph.attrs["address"] = std::make_shared<any>(std::move(address_vec));
+  graph.attrs["shape"] = std::make_shared<any>(std::move(shape_vec));
+  graph.attrs["dtype"] = std::make_shared<any>(std::move(dtype_vec));
+  graph.attrs["device_copy_op"] = std::make_shared<any>(std::move(device_copy_op));
+  graph.attrs["p2pnet_init_op"] = std::make_shared<any>(std::move(device_copy_op));
+  graph.attrs["p2pnet_send_op"] = std::make_shared<any>(std::move(device_copy_op));
+  graph.attrs["pepnet_recv_op"] = std::make_shared<any>(std::move(device_copy_op));
+
+  return ApplyPass(std::move(graph), "SplitDistributedGraph");
+}
+
 /*!
  * \brief Get the gradient graph whose outputs are gradients of xs wrt to ys.
  * \param graph The input graph.

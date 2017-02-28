@@ -66,6 +66,7 @@ using DTypeVector = std::vector<int>;
  * \endcode
  */
 using DeviceVector = std::vector<int>;
+using AddressVector = std::vector<std::string>;
 
 /*!
  * \brief The result holder of device of each operator in the graph.
