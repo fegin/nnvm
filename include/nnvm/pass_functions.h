@@ -130,9 +130,9 @@ inline Graph SplitDistributedGraph(
   graph.attrs["shape"] = std::make_shared<any>(std::move(shape_vec));
   graph.attrs["dtype"] = std::make_shared<any>(std::move(dtype_vec));
   graph.attrs["device_copy_op"] = std::make_shared<any>(std::move(device_copy_op));
-  graph.attrs["p2pnet_init_op"] = std::make_shared<any>(std::move(device_copy_op));
-  graph.attrs["p2pnet_send_op"] = std::make_shared<any>(std::move(device_copy_op));
-  graph.attrs["pepnet_recv_op"] = std::make_shared<any>(std::move(device_copy_op));
+  graph.attrs["p2pnet_init_op"] = std::make_shared<any>(std::move(p2pnet_init_op));
+  graph.attrs["p2pnet_send_op"] = std::make_shared<any>(std::move(p2pnet_send_op));
+  graph.attrs["p2pnet_recv_op"] = std::make_shared<any>(std::move(p2pnet_recv_op));
 
   return ApplyPass(std::move(graph), "SplitDistributedGraph");
 }
