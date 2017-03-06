@@ -125,7 +125,8 @@ inline Graph SplitDistributedGraph(
     Graph graph, const AddressVector& address_vec,
     const ShapeVector& shape_vec, const DTypeVector& dtype_vec,
     const std::string& device_copy_op, const std::string& p2pnet_init_op,
-    const std::string& p2pnet_send_op, const std::string& p2pnet_recv_op) {
+    const std::string& p2pnet_send_op, const std::string& p2pnet_recv_op,
+    size_t* num_forward_inputs, size_t* num_forward_outputs) {
   graph.attrs["address"] = std::make_shared<any>(std::move(address_vec));
   graph.attrs["shape"] = std::make_shared<any>(std::move(shape_vec));
   graph.attrs["dtype"] = std::make_shared<any>(std::move(dtype_vec));
@@ -133,8 +134,12 @@ inline Graph SplitDistributedGraph(
   graph.attrs["p2pnet_init_op"] = std::make_shared<any>(std::move(p2pnet_init_op));
   graph.attrs["p2pnet_send_op"] = std::make_shared<any>(std::move(p2pnet_send_op));
   graph.attrs["p2pnet_recv_op"] = std::make_shared<any>(std::move(p2pnet_recv_op));
-
-  return ApplyPass(std::move(graph), "SplitDistributedGraph");
+  graph.attrs["num_forward_inputs"] = std::make_shared<any>(*num_forward_inputs);
+  graph.attrs["num_forward_outputs"] = std::make_shared<any>(*num_forward_outputs);
+  auto ret = ApplyPass(std::move(graph), "SplitDistributedGraph");
+  *num_forward_inputs = ret.GetAttr<size_t>("num_forward_inputs");
+  *num_forward_outputs = ret.GetAttr<size_t>("num_forward_outputs");
+  return ret;
 }
 
 /*!

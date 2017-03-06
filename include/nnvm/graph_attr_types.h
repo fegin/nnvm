@@ -67,6 +67,8 @@ using DTypeVector = std::vector<int>;
  */
 using DeviceVector = std::vector<int>;
 using AddressVector = std::vector<std::string>;
+using NodeIdMap = std::vector<int>;
+using EntryIdMap = std::vector<int>;
 
 /*!
  * \brief The result holder of device of each operator in the graph.
