@@ -18,7 +18,6 @@ bool IsLocal(std::string address, std::string localhost) {
   return found != std::string::npos;
 }
 
-// TODO: Determine this port dynamically.
 static unsigned port = 9000;
 const std::string localhost = "127.0.0.1";
 
@@ -99,9 +98,6 @@ static std::string CreateIdentity(const std::string& seed) {
 }
 
 Graph SplitDistributedGraph(Graph src) {
-  //CHECK(src.attrs.count("device"))
-      //<< "Need graph attribute \"device_group_attr_key\" in PlaceDevice";
-
   const auto& address_vec = src.GetAttr<AddressVector>("address");
   const auto& shape_vec = src.GetAttr<ShapeVector>("shape");
   const auto& dtype_vec = src.GetAttr<DTypeVector>("dtype");
@@ -112,22 +108,18 @@ Graph SplitDistributedGraph(Graph src) {
   const size_t num_forward_inputs = src.GetAttr<size_t>("num_forward_inputs");
   const size_t num_forward_outputs = src.GetAttr<size_t>("num_forward_outputs");
   const IndexedGraph& idx = src.indexed_graph();
-
-  //std::cout << "num_forward_inputs = " << num_forward_inputs << std::endl;
-  //std::cout << "num_forward_outputs = " << num_forward_outputs << std::endl;
-  // TODO: Get localhost from either net_init or "address".
-
   std::vector<NodeEntry> new_outputs;
   std::map<uint32_t, NodePtr> old_nid_to_new_node;
   std::map<Node*, uint32_t> new_node_to_old_nid;
   std::map<uint32_t, NodeEntry> old_eid_to_new_entry;
   std::map<std::pair<Node*, uint32_t>, uint32_t> new_entry_to_old_eid;
-  //std::map<std::pair<NodePtr, int>, NodeEntry> new_entries;
-  //std::map<NodeEntry, int> input_entry_count;
+  size_t num_new_forward_inputs = 0;
+  size_t num_removed_forward_inputs = 0;
+  size_t num_new_forward_outputs = 0;
+  size_t num_removed_forward_outputs = 0;
+  // TODO: Get localhost from either net_init or "address".
 
   bool already_has_init_node = false;
-  size_t num_new_forward_inputs = 0, num_removed_forward_inputs = 0;
-  size_t num_new_forward_outputs = 0, num_removed_forward_outputs = 0;
   NodeEntry net_init_entry = CreateNetInit(src, net_init_op,
                                            &already_has_init_node);
   if (!already_has_init_node) {
@@ -139,8 +131,10 @@ Graph SplitDistributedGraph(Graph src) {
   std::cout << "SplitDistributedGraph pass begins" << std::endl;
   size_t num_input_encountered = 0;
   for (uint32_t old_nid = 0; old_nid < idx.num_nodes(); ++old_nid) {
-    // Always creates a new node for local nodes even if they may be discarded
-    // later, e.g, copy node between two machines.
+    // Always creates a new node for local nodes even if it may be discarded
+    // later, e.g, a copy node between two machines. There is one exception!!
+    // MXNet implicitly assumes that variables can not be changed.  As a result,
+    // we should keep variables even if this makes the code inconsistent.
     const auto& node_address = address_vec[old_nid];
     NodePtr new_node = nullptr;
     bool is_backward_input = false;
@@ -151,12 +145,17 @@ Graph SplitDistributedGraph(Graph src) {
       }
     }
     if (IsLocal(node_address, localhost)) {
-      new_node = Node::Create();
-      new_node->attrs = idx[old_nid].source->attrs;
-      new_node->control_deps.reserve(idx[old_nid].control_deps.size());
-      for (size_t i = 0; i < idx[old_nid].control_deps.size(); ++i) {
-        uint32_t old_cid = idx[old_nid].control_deps[i];
-        new_node->control_deps.push_back(old_nid_to_new_node[old_cid]);
+      if (idx[old_nid].source->is_variable()) {
+        // Note: Must preserve the original variable. See the above comment.
+        new_node.reset(const_cast<nnvm::Node*>(idx[old_nid].source));
+      } else {
+        new_node = Node::Create();
+        new_node->attrs = idx[old_nid].source->attrs;
+        new_node->control_deps.reserve(idx[old_nid].control_deps.size());
+        for (size_t i = 0; i < idx[old_nid].control_deps.size(); ++i) {
+          uint32_t old_cid = idx[old_nid].control_deps[i];
+          new_node->control_deps.push_back(old_nid_to_new_node[old_cid]);
+        }
       }
       old_nid_to_new_node[old_nid] = new_node;
       new_node_to_old_nid[new_node.get()] = old_nid;
@@ -227,12 +226,12 @@ Graph SplitDistributedGraph(Graph src) {
                                    NodeEntry{old_nid_to_new_node[sender_old_nid],
                                              sender_inode.index, sender_inode.version},
                                    node_address, net_id, net_send_op);
-          // Replace the copy node in all the maps.
+          // Replaces the copy node in all the maps.
           old_nid_to_new_node[input_ientry.node_id] = node;
           new_node_to_old_nid[node.get()] = input_ientry.node_id;
         }
-        auto sender_entry = NodeEntry{node, 0, 0};
-        auto old_eid = idx.entry_id(input_inode.inputs[0]);
+        const auto sender_entry = NodeEntry{node, 0, 0};
+        const auto old_eid = idx.entry_id(input_inode.inputs[0]);
         old_eid_to_new_entry[old_eid] = sender_entry;
         new_entry_to_old_eid[std::make_pair(sender_entry.node.get(), sender_entry.index)] = old_eid;
         new_outputs.push_back(sender_entry);
@@ -242,21 +241,27 @@ Graph SplitDistributedGraph(Graph src) {
       }
     }
   }
-
   std::cout << "SplitDistributedGraph pass finished" << std::endl;
+
   // Uses the new send/recv nodes and the preserved nodes to make the new Graph.
   Graph ret;
-  uint32_t i = 0;
+  OutputIdxMap output_idx_reverse_map;
+  uint32_t old_output_idx = 0;
+  uint32_t new_output_idx = 0;
   for (const NodeEntry& e : src.outputs) {
-    i++;
     const uint32_t node_id = idx.node_id(e.node.get());
     if (old_nid_to_new_node.find(node_id) != old_nid_to_new_node.end()) {
       ret.outputs.emplace_back(e);
-    } else if (i <= num_forward_outputs) {
+      output_idx_reverse_map[old_output_idx] = new_output_idx;
+      new_output_idx++;
+    } else if (old_output_idx < num_forward_outputs) {
       num_removed_forward_outputs++;
     }
+    old_output_idx++;
   }
-  // TODO: Figure out what new outputs are forward and what new output are backward.
+  // TODO: We currently assumes that all new outputs (creating from send nodes)
+  // all belong to forward output. Needs to double check if this assumption is
+  // correct.
   for (const auto& n : new_outputs) {
     ret.outputs.emplace(ret.outputs.begin(), n);
   }
@@ -265,19 +270,13 @@ Graph SplitDistributedGraph(Graph src) {
   DTypeVector new_dtype_vec;
   NodeIdMap node_id_map;
   EntryIdMap entry_id_map;
-
   const auto& new_idx = ret.indexed_graph();
-  //std::cout << num_new_forward_inputs << std::endl;
-  //std::cout << num_new_forward_outputs << std::endl;
-  //std::cout << num_removed_forward_inputs << std::endl;
-  //std::cout << num_removed_forward_outputs << std::endl;
   new_shape_vec.resize(new_idx.num_node_entries());
   new_dtype_vec.resize(new_idx.num_node_entries());
-  entry_id_map.resize(new_idx.num_node_entries());
   for (uint32_t nid = 0; nid < new_idx.num_nodes(); ++nid) {
     const uint32_t old_nid =
         new_node_to_old_nid.at(const_cast<Node*>(new_idx[nid].source));
-    node_id_map.push_back(old_nid);
+    node_id_map[nid] = old_nid;
   }
   std::queue<IndexedGraph::NodeEntry>
     entry_queue(std::deque<IndexedGraph::NodeEntry>(new_idx.outputs().begin(),
@@ -286,11 +285,11 @@ Graph SplitDistributedGraph(Graph src) {
     const auto& entry = entry_queue.front();
     entry_queue.pop();
     // There will be redundent work, but it should be fine.
-    for (const auto& e : idx[entry.node_id].inputs) {
+    for (const auto& e : new_idx[entry.node_id].inputs) {
       entry_queue.push(e);
     }
     const uint32_t eid = new_idx.entry_id(entry);
-    const auto it = new_entry_to_old_eid.find(std::make_pair(const_cast<Node*>(idx[entry.node_id].source), entry.index));
+    const auto it = new_entry_to_old_eid.find(std::make_pair(const_cast<Node*>(new_idx[entry.node_id].source), entry.index));
     if (it == new_entry_to_old_eid.end()) {
       TShape shape(1);
       shape[0] = 1;
@@ -310,16 +309,14 @@ Graph SplitDistributedGraph(Graph src) {
       std::make_shared<dmlc::any>(std::move(node_id_map));
   ret.attrs["entry_id_map"] =
       std::make_shared<dmlc::any>(std::move(entry_id_map));
+  ret.attrs["output_idx_reverse_map"] =
+      std::make_shared<dmlc::any>(std::move(output_idx_reverse_map));
   ret.attrs["num_forward_inputs"] =
       std::make_shared<dmlc::any>(num_forward_inputs + num_new_forward_inputs -
                                   num_removed_forward_inputs);
   ret.attrs["num_forward_outputs"] =
       std::make_shared<dmlc::any>(num_forward_outputs + num_new_forward_outputs -
                                   num_removed_forward_outputs);
-  //std::cout << "ret.attrs[num_forward_inputs] = "
-            //<< ret.GetAttr<size_t>("num_forward_inputs") << std::endl;
-  //std::cout << "ret.attrs[num_forward_outputs] = "
-            //<< ret.GetAttr<size_t>("num_forward_outputs") << std::endl;
   return ret;
 }
 
@@ -334,6 +331,7 @@ NNVM_REGISTER_PASS(SplitDistributedGraph)
 .provide_graph_attr("dtype")
 .provide_graph_attr("node_id_map")
 .provide_graph_attr("entry_id_map")
+.provide_graph_attr("output_idx_reverse_map")
 .provide_graph_attr("num_forward_inputs")
 .provide_graph_attr("num_forward_outputs")
 .depend_graph_attr("address")
