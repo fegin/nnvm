@@ -138,10 +138,8 @@ inline Graph SplitDistributedGraph(
   graph.attrs["num_forward_inputs"] = std::make_shared<any>(*num_forward_inputs);
   graph.attrs["num_forward_outputs"] = std::make_shared<any>(*num_forward_outputs);
   auto ret = ApplyPass(std::move(graph), "SplitDistributedGraph");
-  std::cout << __LINE__ << std::endl;
   *num_forward_inputs = ret.GetAttr<size_t>("num_forward_inputs");
   *num_forward_outputs = ret.GetAttr<size_t>("num_forward_outputs");
-  std::cout << __LINE__ << std::endl;
   return ret;
 }
 

@@ -155,10 +155,7 @@ Graph SplitDistributedGraph(Graph src) {
       }
     }
     if (SameNetAddress(node_address, localhost)) {
-      if (idx[old_nid].source->is_variable()) {
-        // Note: Must preserve the original variable. See the above comment.
-        new_node.reset(const_cast<nnvm::Node*>(idx[old_nid].source));
-      } else {
+      if (!idx[old_nid].source->is_variable()) {
         new_node = Node::Create();
         new_node->attrs = idx[old_nid].source->attrs;
         new_node->control_deps.reserve(idx[old_nid].control_deps.size());
@@ -166,15 +163,16 @@ Graph SplitDistributedGraph(Graph src) {
           uint32_t old_cid = idx[old_nid].control_deps[i];
           new_node->control_deps.push_back(old_nid_to_new_node[old_cid]);
         }
+        old_nid_to_new_node[old_nid] = new_node;
+        new_node_to_old_nid[new_node.get()] = old_nid;
       }
-      old_nid_to_new_node[old_nid] = new_node;
-      new_node_to_old_nid[new_node.get()] = old_nid;
     } else if (is_backward_input) {
       num_removed_forward_inputs++;
     }
 
     // Check all inputs to see if we need insert send/receive.
-    for (const auto& input_ientry : idx[old_nid].inputs) {
+    for (size_t i = 0; i < idx[old_nid].inputs.size(); i++) {
+      const auto& input_ientry = idx[old_nid].inputs[i];
       const auto& input_address = address_vec[input_ientry.node_id];
       const auto& input_inode = idx[input_ientry.node_id];
       const auto& input_node = idx[input_ientry.node_id].source;
@@ -185,6 +183,13 @@ Graph SplitDistributedGraph(Graph src) {
             << input_node->attrs.name << "=" << input_address << ", " 
             << new_node->attrs.name << "=" << node_address;
         if (SameNetAddress(node_address, localhost)) {
+          if (input_node->is_variable()) {
+            // Note: Must preserve the original variable. See the comment about
+            // creating new nodes.
+            NodePtr variable_node = idx[old_nid].source->inputs[i].node;
+            old_nid_to_new_node[input_ientry.node_id] = variable_node;
+            new_node_to_old_nid[variable_node.get()] = input_ientry.node_id;
+          }
           CreateInputEntry(new_node, old_nid_to_new_node[input_ientry.node_id],
                            true, input_ientry);
         }
@@ -258,7 +263,6 @@ Graph SplitDistributedGraph(Graph src) {
     const uint32_t node_id = idx.node_id(e.node.get());
     if (old_nid_to_new_node.find(node_id) != old_nid_to_new_node.end()) {
       ret.outputs.emplace_back(e);
-      std::cout << __LINE__ << " " << old_output_idx << std::endl;
       output_idx_reverse_map[old_output_idx] = new_output_idx;
       new_output_idx++;
     } else if (old_output_idx < num_forward_outputs) {
