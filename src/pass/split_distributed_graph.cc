@@ -21,8 +21,8 @@ bool IsLocal(std::string address, std::string localhost) {
 static unsigned port = 9000;
 const std::string localhost = "127.0.0.1";
 
-NodeEntry CreateNetInit(Graph& graph, const Op* init_op,
-                        bool* already_has_init_node) {
+static NodeEntry CreateNetInit(Graph& graph, const Op* init_op,
+                               bool* already_has_init_node) {
   NodeEntry ret;
   NodePtr node = Node::Create();
   *already_has_init_node = false;
@@ -39,7 +39,7 @@ NodeEntry CreateNetInit(Graph& graph, const Op* init_op,
     node->attrs.op = init_op;
     node->attrs.name = "NetInit";
     std::ostringstream os;
-    os << "127.0.0.1:" << port;
+    os << localhost << port;
     node->attrs.dict["address"] = os.str();
     node->attrs.op->attr_parser(&(node->attrs));
     os << "_redudent_var";
@@ -51,11 +51,11 @@ NodeEntry CreateNetInit(Graph& graph, const Op* init_op,
 
 // TODO: Currently I hardcode the parameters in CreateNetSendNode and
 // CreateNetRecvNode. A cleaner way to create these parameters may be required.
-NodePtr CreateNetSendNode(const NodeEntry& init_node,
-                          const NodeEntry& data_node,
-                          const std::string& receiver_address,
-                          const std::string tensor_id, const Op* send_op) {
-
+static NodePtr CreateNetSendNode(const NodeEntry& init_node,
+                                 const NodeEntry& data_node,
+                                 const std::string& receiver_address,
+                                 const std::string tensor_id,
+                                 const Op* send_op) {
   NodePtr node = Node::Create();
   std::ostringstream os;
   os << receiver_address << "_" << tensor_id << "_sender" ;
@@ -69,10 +69,11 @@ NodePtr CreateNetSendNode(const NodeEntry& init_node,
   return node;
 }
 
-NodePtr CreateNetRecvNode(const NodeEntry& init_node,
-                          const std::string& sender_address,
-                          const std::string tensor_id, const TShape& shape,
-                          const int dtype, const Op* recv_op) {
+static NodePtr CreateNetRecvNode(const NodeEntry& init_node,
+                                 const std::string& sender_address,
+                                 const std::string tensor_id,
+                                 const TShape& shape, const int dtype,
+                                 const Op* recv_op) {
   NodePtr node = Node::Create();
   std::ostringstream os;
   os << sender_address << "_" << tensor_id << "_receiver";
@@ -85,7 +86,6 @@ NodePtr CreateNetRecvNode(const NodeEntry& init_node,
   os.clear(); os << shape;
   node->attrs.dict["shape"] = os.str();
   node->attrs.op->attr_parser(&(node->attrs));
-  /* TODO: Create a variable */
   os << "_redudent_var";
   node->inputs.emplace_back(Symbol::CreateVariable(os.str()).outputs[0]);
   node->inputs.emplace_back(init_node);
@@ -163,6 +163,18 @@ Graph SplitDistributedGraph(Graph src) {
       num_removed_forward_inputs++;
     }
 
+    auto CreateInputEntry = [&idx, &old_eid_to_new_entry, &new_entry_to_old_eid]
+        (NodePtr node, const NodePtr input_node, bool use_old_ientry_info,
+         const IndexedGraph::NodeEntry& old_ientry) {
+      const uint32_t index = (use_old_ientry_info) ? old_ientry.index : 0;
+      const uint32_t version = (use_old_ientry_info) ? old_ientry.version : 0;
+      const auto new_input_entry = NodeEntry{input_node, index, version};
+      node->inputs.push_back(new_input_entry);
+      const uint32_t old_eid = idx.entry_id(old_ientry);
+      old_eid_to_new_entry[old_eid] = new_input_entry;
+      new_entry_to_old_eid[std::make_pair(new_input_entry.node.get(),
+                                          new_input_entry.index)] = old_eid;
+    };
     // Check all inputs to see if we need insert send/receive.
     for (const auto& input_ientry : idx[old_nid].inputs) {
       const auto& input_address = address_vec[input_ientry.node_id];
@@ -171,17 +183,11 @@ Graph SplitDistributedGraph(Graph src) {
       if (input_node->op() != copy_op) {
         CHECK(IsLocal(input_address, localhost)); // Input must be local
         if (IsLocal(node_address, localhost)) {
-          const auto new_input_entry =
-              NodeEntry{old_nid_to_new_node[input_ientry.node_id],
-              input_ientry.index, input_ientry.version};
-          new_node->inputs.push_back(new_input_entry);
-          old_eid_to_new_entry[idx.entry_id(input_ientry)] = new_input_entry;
-          new_entry_to_old_eid[std::make_pair(new_input_entry.node.get(), new_input_entry.index)] = idx.entry_id(input_ientry);
+          CreateInputEntry(new_node, old_nid_to_new_node[input_ientry.node_id],
+                           true, input_ientry);
         }
         continue;
-      }
-
-      if (input_node->inputs[0].node->op() == net_init_op) {
+      } else if (input_node->inputs[0].node->op() == net_init_op) {
         // For a copy node whose input is a net_init_op, it's uselss to us.
         continue;
       }
@@ -199,22 +205,19 @@ Graph SplitDistributedGraph(Graph src) {
         CHECK(idx[sender_old_nid].source->op() != net_init_op &&
               idx[sender_old_nid].source->op() != net_send_op &&
               idx[sender_old_nid].source->op() != net_recv_op);
+        CreateInputEntry(new_node, old_nid_to_new_node[input_ientry.node_id],
+                         true, input_ientry);
       } else if (IsLocal(node_address, localhost)) {
         if (idx[old_nid].source->op() != net_recv_op) {
           // Inserts a net_recv_op node to replace the copy_op node.
-          auto node = CreateNetRecvNode(net_init_entry, sender_address, net_id,
-                                        shape_vec[idx.entry_id(input_ientry)],
-                                        dtype_vec[idx.entry_id(input_ientry)],
-                                        net_recv_op);
+          auto recv_node =
+              CreateNetRecvNode(net_init_entry, sender_address, net_id,
+                                shape_vec[idx.entry_id(input_ientry)],
+                                dtype_vec[idx.entry_id(input_ientry)],
+                                net_recv_op);
           num_new_forward_inputs++;
-          // Replace the copy node in all the maps.
-          old_nid_to_new_node[input_ientry.node_id] = node;
-          new_node_to_old_nid[node.get()] = input_ientry.node_id;
-          // TODO: insert NodeEntry to the node.
-          const auto new_input_entry = NodeEntry{node, 0, 0};
-          new_node->inputs.push_back(new_input_entry);
-          old_eid_to_new_entry[idx.entry_id(input_ientry)] = new_input_entry;
-          new_entry_to_old_eid[std::make_pair(new_input_entry.node.get(), new_input_entry.index)] = idx.entry_id(input_ientry);
+          // Replaces the copy node in all the maps.
+          CreateInputEntry(new_node, recv_node, false, input_ientry);
         }
       } else if (IsLocal(sender_address, localhost)) {
         CHECK(!IsLocal(input_address, localhost));
@@ -222,10 +225,11 @@ Graph SplitDistributedGraph(Graph src) {
             old_nid_to_new_node[idx.node_id(input_node->inputs[0].node.get())];
         if (idx[sender_old_nid].source->op() != net_send_op) {
           // Inserts a net_send_op node to replace the copy_op node.
-          node = CreateNetSendNode(net_init_entry,
-                                   NodeEntry{old_nid_to_new_node[sender_old_nid],
-                                             sender_inode.index, sender_inode.version},
-                                   node_address, net_id, net_send_op);
+          node = CreateNetSendNode(
+                    net_init_entry,
+                    NodeEntry{old_nid_to_new_node[sender_old_nid],
+                              sender_inode.index, sender_inode.version},
+                    node_address, net_id, net_send_op);
           // Replaces the copy node in all the maps.
           old_nid_to_new_node[input_ientry.node_id] = node;
           new_node_to_old_nid[node.get()] = input_ientry.node_id;
@@ -233,7 +237,8 @@ Graph SplitDistributedGraph(Graph src) {
         const auto sender_entry = NodeEntry{node, 0, 0};
         const auto old_eid = idx.entry_id(input_inode.inputs[0]);
         old_eid_to_new_entry[old_eid] = sender_entry;
-        new_entry_to_old_eid[std::make_pair(sender_entry.node.get(), sender_entry.index)] = old_eid;
+        new_entry_to_old_eid[std::make_pair(sender_entry.node.get(),
+                                            sender_entry.index)] = old_eid;
         new_outputs.push_back(sender_entry);
         num_new_forward_outputs += 1;
       } else {
@@ -289,7 +294,10 @@ Graph SplitDistributedGraph(Graph src) {
       entry_queue.push(e);
     }
     const uint32_t eid = new_idx.entry_id(entry);
-    const auto it = new_entry_to_old_eid.find(std::make_pair(const_cast<Node*>(new_idx[entry.node_id].source), entry.index));
+    const auto it =
+        new_entry_to_old_eid.find(
+            std::make_pair(const_cast<Node*>(new_idx[entry.node_id].source),
+                                             entry.index));
     if (it == new_entry_to_old_eid.end()) {
       TShape shape(1);
       shape[0] = 1;
@@ -315,7 +323,8 @@ Graph SplitDistributedGraph(Graph src) {
       std::make_shared<dmlc::any>(num_forward_inputs + num_new_forward_inputs -
                                   num_removed_forward_inputs);
   ret.attrs["num_forward_outputs"] =
-      std::make_shared<dmlc::any>(num_forward_outputs + num_new_forward_outputs -
+      std::make_shared<dmlc::any>(num_forward_outputs +
+                                  num_new_forward_outputs -
                                   num_removed_forward_outputs);
   return ret;
 }
@@ -344,7 +353,6 @@ NNVM_REGISTER_PASS(SplitDistributedGraph)
 .depend_graph_attr("p2pnet_recv_op")
 .depend_graph_attr("num_forward_inputs")
 .depend_graph_attr("num_forward_outputs");
-
 // TODO: What's this for?
 //DMLC_JSON_ENABLE_ANY(DeviceAssignMap, dict_str_int);
 
