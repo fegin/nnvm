@@ -39,7 +39,7 @@ static NodeEntry CreateNetInit(Graph& graph, const std::string localhost,
     os << localhost;
     node->attrs.dict["address"] = os.str();
     node->attrs.op->attr_parser(&(node->attrs));
-    os << "_redudent_var";
+    os << "_NetInit_redudent_var";
     node->inputs.emplace_back(Symbol::CreateVariable(os.str()).outputs[0]);
     ret = NodeEntry{std::move(node), 0, 0};
   }
@@ -78,12 +78,15 @@ static NodePtr CreateNetRecvNode(const NodeEntry& init_node,
   node->attrs.name = os.str();
   node->attrs.dict["tensor_id"] = tensor_id;
   node->attrs.dict["address"] = sender_address;
-  os.clear(); os << dtype;
-  node->attrs.dict["dtype"] = os.str();
-  os.clear(); os << shape;
+  static const char* dtype_enum[] = {"float32", "float64", "float16", "uint8",
+                                     "int32"};
+  //os.str(""); os.clear(); os << dtype;
+  node->attrs.dict["dtype"] = dtype_enum[dtype];
+  os.str(""); os.clear(); os << shape;
   node->attrs.dict["shape"] = os.str();
   node->attrs.op->attr_parser(&(node->attrs));
-  os << "_redudent_var";
+  os.str(""); os.clear();
+  os << sender_address << "_" << tensor_id << "_NetRecv_redudent_var";
   node->inputs.emplace_back(Symbol::CreateVariable(os.str()).outputs[0]);
   node->inputs.emplace_back(init_node);
   return node;
@@ -137,7 +140,7 @@ Graph SplitDistributedGraph(Graph src) {
     node->inputs.push_back(new_input_entry);
     const uint32_t old_eid = idx.entry_id(old_ientry);
     old_eid_to_new_entry[old_eid] = new_input_entry;
-    new_entry_to_old_eid[std::make_pair(new_input_entry.node.get(),
+    new_entry_to_old_eid[std::make_pair(input_node.get(),
                                         new_input_entry.index)] = old_eid;
   };
   for (uint32_t old_nid = 0; old_nid < idx.num_nodes(); ++old_nid) {
@@ -178,9 +181,9 @@ Graph SplitDistributedGraph(Graph src) {
       const auto& input_node = idx[input_ientry.node_id].source;
       if (input_node->op() != copy_op) {
         // Input must be on the same machine.
-        CHECK(SameNetAddress(input_address, node_address) || 
-              idx[old_nid].source->op() == copy_op) 
-            << input_node->attrs.name << "=" << input_address << ", " 
+        CHECK(SameNetAddress(input_address, node_address) ||
+              idx[old_nid].source->op() == copy_op)
+            << input_node->attrs.name << "=" << input_address << ", "
             << new_node->attrs.name << "=" << node_address;
         if (SameNetAddress(node_address, localhost)) {
           if (input_node->is_variable()) {
@@ -261,10 +264,18 @@ Graph SplitDistributedGraph(Graph src) {
   uint32_t new_output_idx = 0;
   for (const NodeEntry& e : src.outputs) {
     const uint32_t node_id = idx.node_id(e.node.get());
+    std::cout << __LINE__ << " " << e.node->attrs.name << std::endl;
     if (old_nid_to_new_node.find(node_id) != old_nid_to_new_node.end()) {
-      ret.outputs.emplace_back(e);
+      const auto& new_node = old_nid_to_new_node.at(node_id);
+      const auto new_entry = NodeEntry{new_node, e.index, e.version};
+      const uint32_t old_eid = idx.entry_id(e);
+      old_eid_to_new_entry[old_eid] = new_entry;
+      new_entry_to_old_eid[std::make_pair(new_node.get(), new_entry.index)]
+          = old_eid;
+      ret.outputs.emplace_back(new_entry);
       output_idx_reverse_map[old_output_idx] = new_output_idx;
       new_output_idx++;
+
     } else if (old_output_idx < num_forward_outputs) {
       num_removed_forward_outputs++;
     }
@@ -286,9 +297,11 @@ Graph SplitDistributedGraph(Graph src) {
   new_shape_vec.resize(new_idx.num_node_entries());
   new_dtype_vec.resize(new_idx.num_node_entries());
   for (uint32_t nid = 0; nid < new_idx.num_nodes(); ++nid) {
-    const uint32_t old_nid =
-        new_node_to_old_nid.at(const_cast<Node*>(new_idx[nid].source));
-    node_id_map[nid] = old_nid;
+    const auto it = new_node_to_old_nid.find(
+                        const_cast<Node*>(new_idx[nid].source));
+    if (it != new_node_to_old_nid.end()) {
+      node_id_map[nid] = it->second;
+    }
   }
   std::queue<IndexedGraph::NodeEntry>
     entry_queue(std::deque<IndexedGraph::NodeEntry>(new_idx.outputs().begin(),
@@ -305,6 +318,7 @@ Graph SplitDistributedGraph(Graph src) {
         new_entry_to_old_eid.find(
             std::make_pair(const_cast<Node*>(new_idx[entry.node_id].source),
                                              entry.index));
+    std::cout << "Assiging new shape[i] : " << new_idx[entry.node_id].source->attrs.name << " " << eid << std::endl;
     if (it == new_entry_to_old_eid.end()) {
       TShape shape(1);
       shape[0] = 1;
