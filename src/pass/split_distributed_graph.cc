@@ -205,8 +205,11 @@ Graph SplitDistributedGraph(Graph src) {
       const auto& sender_inode = input_inode.inputs[0];
       const auto& sender_old_nid = sender_inode.node_id;
       const auto& sender_address = address_vec[sender_old_nid];
-      const std::string net_id = CreateIdentity(input_node->op()->name +
+      const std::string net_id = CreateIdentity(input_node->attrs.name +
                                                 sender_address);
+      std::cout << __FILE__ << " " << __LINE__ << " " << net_id << " "
+                << input_node->op()->name << " " << input_node->attrs.name
+                << std::endl;
       if (SameNetAddress(node_address, localhost) &&
           SameNetAddress(sender_address, localhost)) {
         CHECK(idx[old_nid].source->op() != net_init_op &&
@@ -226,8 +229,12 @@ Graph SplitDistributedGraph(Graph src) {
                                 dtype_vec[idx.entry_id(input_ientry)],
                                 net_recv_op);
           num_new_forward_inputs++;
-          // Replaces the copy node in all the maps.
+          // Replaces the copy node in all the maps. We have to remove the copy
+          // node from new_node_to_old_nid. Otherwise, the legacy mapping may
+          // cause some problems.
           CreateInputEntry(new_node, recv_node, false, input_ientry);
+          auto copy_node = old_nid_to_new_node[input_ientry.node_id];
+          new_node_to_old_nid.erase(copy_node.get());
           old_nid_to_new_node[input_ientry.node_id] = recv_node;
           new_node_to_old_nid[recv_node.get()] = input_ientry.node_id;
           std::cout << "Copy node address is : "
@@ -237,29 +244,29 @@ Graph SplitDistributedGraph(Graph src) {
         }
       } else if (SameNetAddress(sender_address, localhost)) {
         CHECK(!SameNetAddress(input_address, localhost));
-        NodePtr node =
+        NodePtr sender_node =
             old_nid_to_new_node[idx.node_id(input_node->inputs[0].node.get())];
         if (idx[sender_old_nid].source->op() != net_send_op) {
           // Inserts a net_send_op node to replace the copy_op node.
-          node = CreateNetSendNode(
-                    net_init_entry,
-                    NodeEntry{old_nid_to_new_node[sender_old_nid],
-                              sender_inode.index, sender_inode.version},
-                    node_address, net_id, net_send_op);
+          sender_node = CreateNetSendNode(
+                            net_init_entry,
+                            NodeEntry{old_nid_to_new_node[sender_old_nid],
+                                       sender_inode.index,
+                                       sender_inode.version},
+                            node_address, net_id, net_send_op);
           // Replaces the copy node in all the maps.
-          // FIXME:
-          old_nid_to_new_node[input_ientry.node_id] = node;
-          new_node_to_old_nid[node.get()] = input_ientry.node_id;
+          //old_nid_to_new_node[input_ientry.node_id] = node;
+          //new_node_to_old_nid[node.get()] = input_ientry.node_id;
           std::cout << "Copy node address is : "
                     << address_vec[input_ientry.node_id] << std::endl;
           std::cout << "Sender node address is : "
                     << sender_address << std::endl;
         }
-        const auto sender_entry = NodeEntry{node, 0, 0};
-        const auto old_eid = idx.entry_id(input_inode.inputs[0]);
-        old_eid_to_new_entry[old_eid] = sender_entry;
-        new_entry_to_old_eid[std::make_pair(sender_entry.node.get(),
-                                            sender_entry.index)] = old_eid;
+        const auto sender_entry = NodeEntry{sender_node, 0, 0};
+        //const auto old_eid = idx.entry_id(input_inode.inputs[0]);
+        //old_eid_to_new_entry[old_eid] = sender_entry;
+        //new_entry_to_old_eid[std::make_pair(sender_entry.node.get(),
+                                            //sender_entry.index)] = old_eid;
         new_outputs.push_back(sender_entry);
         num_new_forward_outputs += 1;
       } else {
@@ -275,7 +282,6 @@ Graph SplitDistributedGraph(Graph src) {
   uint32_t new_output_idx = 0;
   for (const NodeEntry& e : src.outputs) {
     const uint32_t node_id = idx.node_id(e.node.get());
-    std::cout << __LINE__ << " " << e.node->attrs.name << std::endl;
     if (old_nid_to_new_node.find(node_id) != old_nid_to_new_node.end()) {
       const auto& new_node = old_nid_to_new_node.at(node_id);
       const auto new_entry = NodeEntry{new_node, e.index, e.version};
@@ -314,7 +320,6 @@ Graph SplitDistributedGraph(Graph src) {
     const size_t num_outputs = new_idx[nid].source->num_outputs();
     for (size_t output_idx = 0; output_idx < num_outputs; output_idx++) {
       const size_t eid = new_idx.entry_id(nid, output_idx);
-      const auto it = new_node_to_old_nid.find(const_cast<Node*>(new_idx[nid].source));
       if (it == new_node_to_old_nid.end()) {
         TShape shape(1);
         shape[0] = 1;
