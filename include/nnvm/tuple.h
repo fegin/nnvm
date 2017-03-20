@@ -339,6 +339,15 @@ class TShape : public Tuple<index_t> {
     std::fill_n(begin(), ndim, 1);
   }
   /*!
+   * constructor to construct a shape with all given value.
+   * \param ndim the number of dimension
+   * \param val the value to fill the shape.
+   */
+  inline TShape(index_t ndim, index_t val) {  // NOLINT(*)
+    this->SetDim(ndim);
+    std::fill_n(begin(), ndim, val);
+  }
+  /*!
    * \brief copy constructor of TShape
    * \param s source shape.
    */
