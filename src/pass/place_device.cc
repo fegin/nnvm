@@ -8,25 +8,66 @@
 #include <nnvm/op_attr_types.h>
 #include <nnvm/graph_attr_types.h>
 
+using namespace std;
+
 namespace nnvm {
 namespace pass {
 namespace {
 
+template<typename AttrType>
+void RemapEntryAttributes(
+    Graph origin, Graph* newgraph,
+    const vector<NodePtr>& new_node_map,
+    const string& attr_name) {
+  const IndexedGraph& origin_idx = origin.indexed_graph();
+  const IndexedGraph& new_idx = newgraph->indexed_graph();
+  CHECK_NE(origin.attrs.count(attr_name), 0);
+  const vector<AttrType>& origin_attr_vec = origin.GetAttr<vector<AttrType>>(attr_name);
+  CHECK_EQ(origin_attr_vec.size(), origin_idx.num_node_entries());
+  vector<AttrType> new_attr_vec(new_idx.num_node_entries());
+  vector<bool> visited_new_nodes(new_idx.num_nodes(), false);
+  for (uint32_t origin_nid = 0; origin_nid < origin_idx.num_nodes(); ++origin_nid) {
+    const Node* origin_node = origin_idx[origin_nid].source;
+    const Node* new_node = new_node_map[origin_nid]?
+      new_node_map[origin_nid].get() : origin_node;
+    const uint32_t new_nid = new_idx.node_id(new_node);
+    for (uint32_t i = 0; i < origin_node->num_outputs(); ++i) {
+      const uint32_t origin_entid = origin_idx.entry_id(origin_nid, i);
+      const uint32_t new_entid = new_idx.entry_id(new_nid, i);
+      new_attr_vec[new_entid] = origin_attr_vec[origin_entid];
+    }
+    visited_new_nodes[new_nid] = true;
+  }
+  // Infer attributes for copy node.
+  // TODO(minjie): this part of logic is not generic!!! We know this remaining
+  // nodes are copy nodes.
+  for (uint32_t nodeid = 0; nodeid < new_idx.num_nodes(); ++nodeid) {
+    if (!visited_new_nodes[nodeid]) {
+      const IndexedGraph::Node& inode = new_idx[nodeid];
+      CHECK_EQ(inode.inputs.size(), 1);
+      CHECK_EQ(inode.source->num_outputs(), 1);
+      CHECK(visited_new_nodes[inode.inputs[0].node_id]);
+      const uint32_t entid = new_idx.entry_id(nodeid, 0);
+      const uint32_t inentid = new_idx.entry_id(inode.inputs[0]);
+      new_attr_vec[entid] = new_attr_vec[inentid];
+    }
+  }
+  newgraph->attrs[attr_name] = std::make_shared<any>(std::move(new_attr_vec));
+}
+
 // simply logic to place device according to device_group hint
 // insert copy node when there is
 Graph PlaceDevice(Graph src) {
-  CHECK(src.attrs.count("device_group_attr_key"))
+  CHECK_NE(src.attrs.count("device_group_attr_key"), 0)
       << "Need graph attribute \"device_group_attr_key\" in PlaceDevice";
-  CHECK(src.attrs.count("device_assign_map"))
+  CHECK_NE(src.attrs.count("device_assign_map"), 0)
       << "Need graph attribute \"device_assign_map\" in PlaceDevice";
-  CHECK(src.attrs.count("device_copy_op"))
+  CHECK_NE(src.attrs.count("device_copy_op"), 0)
       << "Need graph attribute \"device_copy_op\" in PlaceDevice";
-  std::string device_group_attr_key = src.GetAttr<std::string>("device_group_attr_key");
-  const Op* copy_op = Op::Get(src.GetAttr<std::string>("device_copy_op"));
+  const string& device_group_attr_key = src.GetAttr<string>("device_group_attr_key");
+  const Op* copy_op = Op::Get(src.GetAttr<string>("device_copy_op"));
   auto& device_assign_map = src.GetAttr<DeviceAssignMap>("device_assign_map");
   const IndexedGraph& idx = src.indexed_graph();
-  static auto& is_backward =
-      Op::GetAttr<TIsBackward>("TIsBackward");
   DeviceVector device;
   // copy on write semanatics
   if (src.attrs.count("device") != 0) {
@@ -36,137 +77,173 @@ Graph PlaceDevice(Graph src) {
     device.resize(idx.num_nodes(), -1);
   }
 
-  // forward pass
+  // Attempt #1: Place node by its given group or its input entry.
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     const auto& inode = idx[nid];
     auto it = inode.source->attrs.dict.find(device_group_attr_key);
     if (it != inode.source->attrs.dict.end()) {
-      const std::string& device_group = it->second;
+      // If the node has group name in the attribute, then place this node
+      // on the device associated with that group.
+      const string& device_group = it->second;
       auto dit = device_assign_map.find(device_group);
       CHECK(dit != device_assign_map.end())
           << "The device assignment not found for group " << device_group;
       device[nid] = dit->second;
     } else {
-      if (!inode.source->is_variable() &&
-          is_backward.get(inode.source->op(), false)) {
-        if (device[inode.control_deps[0]] != -1) {
-          device[nid] = device[inode.control_deps[0]];
-        }
-      } else {
-        for (const IndexedGraph::NodeEntry& e : inode.inputs) {
-          if (device[e.node_id] != -1) {
-            device[nid] = device[e.node_id]; break;
-          }
+      // Search its input entries. Place the node together with any of
+      // its input entry.
+      for (const IndexedGraph::NodeEntry& e : inode.inputs) {
+        if (device[e.node_id] != -1) {
+          device[nid] = device[e.node_id];
+          break;
         }
       }
     }
   }
-  // backward pass
-  for (uint32_t i = idx.num_nodes(); i != 0; --i) {
-    uint32_t nid = i - 1;
-    const auto& inode = idx[nid];
-    if (device[nid] == -1) continue;
+  // Attempt #2: Place node by its output entry.
+  for (int nid = idx.num_nodes() - 1; nid >= 0; --nid) {
+    const IndexedGraph::Node& inode = idx[nid];
+    if (device[nid] == -1) {
+      // If the placement of this node is unknown, we could not place its
+      // input node according to it.
+      continue;
+    }
     for (const IndexedGraph::NodeEntry& e : inode.inputs) {
-      if (device[e.node_id] == -1) device[e.node_id] = device[nid];
+      if (device[e.node_id] == -1) {
+        // If any of its input node is not placed, place it together with
+        // the currrent node.
+        device[e.node_id] = device[nid];
+      }
+    }
+  }
+  // Final attempt: Place all other unknown nodes to device 0.
+  bool has_multiple_device = false;
+  for (uint32_t nodeid = 0; nodeid < idx.num_nodes(); ++nodeid) {
+    if (device[nodeid] == -1) {
+      device[nodeid] = 0;
+    }
+    if (device[nodeid] != device[0]) {
+      has_multiple_device = true;
     }
   }
 
-  int num_dev = 1, other_dev_id = -1;
-  for (int& dev : device) {
-    if (dev == -1) dev = 0;
-    if (dev != other_dev_id) {
-      if (other_dev_id != -1) ++num_dev;
-      other_dev_id = dev;
-    }
-  }
-
-  if (num_dev == 1) {
+  if (!has_multiple_device) {
     src.attrs.erase("device_group_attr_key");
     src.attrs.erase("device_assign_map");
     src.attrs.erase("device_copy_op");
     src.attrs["device"] = std::make_shared<any>(std::move(device));
     return src;
   }
-  std::map<std::tuple<uint32_t, uint32_t, int>, NodePtr> copy_map;
-  std::vector<NodePtr> new_node_map(idx.num_nodes(), nullptr);
-  std::unordered_map<const Node*, int> new_device_map;
+
+  map<tuple<uint32_t, uint32_t, int>, NodePtr> copy_map;
+  // A map from the original node to the node in the new graph.
+  vector<NodePtr> new_node_map(idx.num_nodes(), nullptr);
+  // A map from the node in the new graph to its assigned device id.
+  unordered_map<const Node*, int> new_device_map;
   static auto& fmutate_inputs = Op::GetAttr<FMutateInputs>("FMutateInputs");
 
-  // insert copy node
+  // Insert copy node.
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
-    int dev_id = device[nid];
+    const int dev_id = device[nid];
     const auto& inode = idx[nid];
-    // check if mutation is needed
-    bool need_mutate = false;
+
+    // Check if any mutable input entry is required to be copy to remote devices.
     if (!inode.source->is_variable() && fmutate_inputs.count(inode.source->op())) {
       for (uint32_t index : fmutate_inputs[inode.source->op()](inode.source->attrs)) {
-        auto e = inode.inputs[index];
-        if (new_node_map[e.node_id] != nullptr || dev_id != device[e.node_id]) {
-          LOG(FATAL) << " mutable state cannot go across device"
-                     << " op=" << inode.source->op()->name
-                     << " input_state_index=" << index;
+        const auto& mutate_in_ent = inode.inputs[index];
+        CHECK(new_node_map[mutate_in_ent.node_id] == nullptr
+            && dev_id == device[mutate_in_ent.node_id])
+          << " mutable input entry should not go across device"
+          << " op=" << inode.source->op()->name
+          << " mutate_input_index=" << index;
+      }
+    }
+
+    // Whether a new node should be created in the new graph to represent this node,
+    // or we could just reuse the original node in the new graph.
+    bool require_new_node = false;
+    
+    // If this node is not a copy node. Loop all the node's input entry.
+    // If the input is not placed on the same device with this node, we need to
+    // create a new node to represent this node in the new graph.
+    if (inode.source->op() != copy_op) {
+      for (const auto& e : inode.inputs) {
+        if (dev_id != device[e.node_id]) {
+          require_new_node = true;
+          break;
         }
       }
     }
-    for (const IndexedGraph::NodeEntry& e : inode.inputs) {
-      if (new_node_map[e.node_id] != nullptr || dev_id != device[e.node_id]) {
-        need_mutate = true; break;
+    // Loop all the node's input entries. If any of its inputs is a new node,
+    // also create a new node for this.
+    if (!require_new_node) {
+      for (const auto& e : inode.inputs) {
+        if (new_node_map[e.node_id] != nullptr) {
+          require_new_node = true;
+          break;
+        }
       }
     }
-    if (!need_mutate) {
+    // Loop all the node's control dependencies. If its dependent node is a new
+    // one, also create a new node.
+    if (!require_new_node) {
       for (const uint32_t cid : inode.control_deps) {
         if (new_node_map[cid] != nullptr)  {
-          need_mutate = true; break;
+          require_new_node = true;
+          break;
         }
       }
     }
-    if (inode.source->is_variable()) {
-      CHECK(!need_mutate) << "consistency check";
-    }
-    if (need_mutate) {
+    CHECK(!(inode.source->is_variable() && require_new_node))
+      << "Variable node should not be changed during PlaceDevice pass.";
+
+    if (require_new_node) {
+      // Create the new node with all its attributes the same as the old one.
       NodePtr new_node = Node::Create();
       new_node->attrs = inode.source->attrs;
       new_node->inputs.reserve(inode.inputs.size());
       for (size_t i = 0; i < inode.inputs.size(); ++i) {
-        const IndexedGraph::NodeEntry& e = inode.inputs[i];
-        if (dev_id != device[e.node_id]) {
-          auto copy_key = std::make_tuple(e.node_id, e.index, dev_id);
+        const IndexedGraph::NodeEntry& in_ent = inode.inputs[i];
+        // New input entry.
+        const NodeEntry& new_in_ent = new_node_map[in_ent.node_id]?
+          NodeEntry{new_node_map[in_ent.node_id], in_ent.index, 0} :
+          inode.source->inputs[i];
+        if (dev_id != device[in_ent.node_id] && inode.source->op() != copy_op) {
+          // Input device and node device is different. Insert copy node.
+          auto copy_key = std::make_tuple(in_ent.node_id, in_ent.index, dev_id);
           auto it = copy_map.find(copy_key);
-          if (it != copy_map.end() && it->first == copy_key) {
-            new_node->inputs.emplace_back(
-                NodeEntry{it->second, 0, 0});
+          if (it != copy_map.end()) {
+            // The copy node has already been created. This happens when the NodeEntry
+            // is used by multiple downstream nodes and they are all on another devices.
+            NodePtr copy_node = it->second;
+            new_node->inputs.emplace_back(NodeEntry{copy_node, 0, 0});
           } else {
+            // Create a new copy node.
             NodePtr copy_node = Node::Create();
-            std::ostringstream os;
-            os << inode.source->inputs[i].node->attrs.name << "_" << e.index <<"_copy";
+            ostringstream os;
+            os << inode.source->inputs[i].node->attrs.name << "_"
+               << in_ent.index <<"_copy";
             copy_node->attrs.op = copy_op;
             copy_node->attrs.name = os.str();
-            if (new_node_map[e.node_id] != nullptr) {
-              copy_node->inputs.emplace_back(
-                NodeEntry{new_node_map[e.node_id], e.index, 0});
-            } else {
-              copy_node->inputs.push_back(inode.source->inputs[i]);
-            }
+            // Connect copy node to the input entry.
+            copy_node->inputs.push_back(new_in_ent);
             if (copy_node->attrs.op->attr_parser != nullptr) {
               copy_node->attrs.op->attr_parser(&(copy_node->attrs));
             }
             copy_map[copy_key] = copy_node;
             new_device_map[copy_node.get()] = dev_id;
+            // Connect the new node to the copy node.
             new_node->inputs.emplace_back(
                 NodeEntry{std::move(copy_node), 0, 0});
           }
         } else {
-          if (new_node_map[e.node_id] != nullptr) {
-            new_node->inputs.emplace_back(
-                NodeEntry{new_node_map[e.node_id], e.index, 0});
-          } else {
-            new_node->inputs.push_back(inode.source->inputs[i]);
-          }
+          // Simply connect new node to the input entry.
+          new_node->inputs.push_back(new_in_ent);
         }
       }
       new_node->control_deps.reserve(inode.control_deps.size());
       for (size_t i = 0; i < inode.control_deps.size(); ++i) {
-        uint32_t cid = inode.control_deps[i];
+        const uint32_t cid = inode.control_deps[i];
         if (new_node_map[cid] != nullptr) {
           new_node->control_deps.push_back(new_node_map[cid]);
         } else {
@@ -179,7 +256,7 @@ Graph PlaceDevice(Graph src) {
       new_device_map[inode.source] = dev_id;
     }
   }
-  // make the new graph
+  // Make the new graph.
   Graph ret;
   for (const NodeEntry& e : src.outputs) {
     if (new_node_map[idx.node_id(e.node.get())] != nullptr) {
@@ -197,7 +274,25 @@ Graph PlaceDevice(Graph src) {
     }
     new_device_vec[nid] = new_device_map.at(source);
   }
+  if (src.attrs.count("shape") != 0) {
+    RemapEntryAttributes<TShape>(src, &ret, new_node_map, "shape");
+  }
+  if (src.attrs.count("dtype") != 0) {
+    RemapEntryAttributes<int>(src, &ret, new_node_map, "dtype");
+  }
   ret.attrs["device"] = std::make_shared<any>(std::move(new_device_vec));
+
+  /*cout << "digraph {" << endl;
+  const auto& retidx = ret.indexed_graph();
+  for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
+    const auto& n = retidx[nid];
+    for (const auto& in : n.inputs) {
+      cout << "\tn" << in.node_id << "_" << retidx[in.node_id].source->attrs.name
+           << " -> n" << nid << "_" << n.source->attrs.name << endl;
+    }
+  }
+  cout << "}" << endl;*/
+
   return ret;
 }
 
