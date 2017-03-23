@@ -163,10 +163,12 @@ Graph SplitDistributedGraph(Graph src) {
       if (!idx[old_nid].source->is_variable()) {
         new_node = Node::Create();
         new_node->attrs = idx[old_nid].source->attrs;
-        new_node->control_deps.reserve(idx[old_nid].control_deps.size());
         for (size_t i = 0; i < idx[old_nid].control_deps.size(); ++i) {
-          uint32_t old_cid = idx[old_nid].control_deps[i];
-          new_node->control_deps.push_back(old_nid_to_new_node[old_cid]);
+          uint32_t old_depend_nid = idx[old_nid].control_deps[i];
+          if (SameNetAddress(address_vec[old_depend_nid], localhost)) {
+            new_node->control_deps.push_back(
+                old_nid_to_new_node[old_depend_nid]);
+          }
         }
         old_nid_to_new_node[old_nid] = new_node;
         new_node_to_old_nid[new_node.get()] = old_nid;
@@ -244,10 +246,6 @@ Graph SplitDistributedGraph(Graph src) {
           old_nid_to_new_node[input_ientry.node_id] = recv_node;
           new_node_to_old_nid[recv_node.get()] = input_ientry.node_id;
           copy_op_map[idx.entry_id(input_ientry)] = new_input_entry;
-          std::cout << "Copy node address is : "
-                    << address_vec[input_ientry.node_id] << std::endl;
-          std::cout << "Receiver node address is : "
-                    << node_address << std::endl;
         }
       } else if (SameNetAddress(sender_address, localhost)) {
         CHECK(!SameNetAddress(input_address, localhost));
@@ -261,22 +259,11 @@ Graph SplitDistributedGraph(Graph src) {
                                        sender_inode.index,
                                        sender_inode.version},
                             node_address, net_id, net_send_op);
-          // Replaces the copy node in all the maps.
-          //old_nid_to_new_node[input_ientry.node_id] = node;
-          //new_node_to_old_nid[node.get()] = input_ientry.node_id;
-          std::cout << "Copy node address is : "
-                    << address_vec[input_ientry.node_id] << std::endl;
-          std::cout << "Sender node address is : "
-                    << sender_address << std::endl;
         }
         const auto sender_entry = NodeEntry{sender_node, 0, 0};
-        //const auto old_eid = idx.entry_id(input_inode.inputs[0]);
-        //old_eid_to_new_entry[old_eid] = sender_entry;
-        //new_entry_to_old_eid[std::make_pair(sender_entry.node.get(),
-                                            //sender_entry.index)] = old_eid;
         copy_op_map[idx.entry_id(input_ientry)] = sender_entry;
         new_outputs.push_back(sender_entry);
-        num_new_forward_outputs += 1;
+        //num_new_forward_outputs += 1;
       } else {
         CHECK(!SameNetAddress(input_address, localhost));
       }
@@ -310,7 +297,8 @@ Graph SplitDistributedGraph(Graph src) {
     // TODO: We currently assumes that all new outputs (creating from send
     // nodes) belong to forward output nodes. Needs to double check if this
     // assumption is correct.
-    ret.outputs.emplace(ret.outputs.begin(), n);
+    //ret.outputs.emplace(ret.outputs.begin(), n);
+    ret.outputs[0].node->control_deps.push_back(n.node);
   }
 
   std::cout << "SplitDistributedGraph is updating attributes." << std::endl;
