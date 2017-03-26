@@ -121,6 +121,16 @@ inline Graph PlaceDevice(Graph graph,
   return ApplyPass(std::move(graph), "PlaceDevice");
 }
 
+inline Graph SplitGradientTest(Graph graph,
+                               const std::string& forward_address,
+                               const std::string& backward_address,
+                               const uint32_t num_forward_outputs) {
+  graph.attrs["forward_address"] = std::make_shared<any>(std::move(forward_address));
+  graph.attrs["backward_address"] = std::make_shared<any>(std::move(backward_address));
+  graph.attrs["num_forward_outputs"] = std::make_shared<any>(std::move(num_forward_outputs));
+  return ApplyPass(std::move(graph), "SplitGradientTest");
+}
+
 inline Graph SplitDistributedGraph(
     Graph graph, const AddressVector& address_vec, const std::string localhost,
     const ShapeVector& shape_vec, const DTypeVector& dtype_vec,
