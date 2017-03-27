@@ -164,6 +164,10 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
           NodePtr variable_node = in.idx[old_nid].source->inputs[i].node;
           out->old_nid_to_new_node[input_ientry.node_id] = variable_node;
           out->new_node_to_old_nid[variable_node.get()] = input_ientry.node_id;
+          // Very hacky. Every variables must depend on NetInit node.
+          // Otherwise, it is possible that NetInit_redundant_var will be placed
+          // to "backward" input.
+          variable_node->control_deps.push_back(net_init_entry.node);
         }
         CreateInputEntry(new_node,
                          out->old_nid_to_new_node[input_ientry.node_id],
@@ -335,6 +339,14 @@ Graph SplitDistributedGraph(Graph src) {
     0,
     0
   };
+
+  std::set<std::string> address_set(in.address_vec.begin(),
+                                    in.address_vec.end());
+  if (address_set.size() == 1) {
+    out.ret.outputs = in.src.outputs;
+    out.ret.attrs = in.src.attrs;
+    return out.ret;
+  }
 
   bool already_has_init_node = false;
   NodeEntry net_init_entry = CreateNetInit(in, &already_has_init_node);

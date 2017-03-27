@@ -122,11 +122,10 @@ inline Graph PlaceDevice(Graph graph,
 }
 
 inline Graph SplitGradientTest(Graph graph,
-                               const std::string& forward_address,
-                               const std::string& backward_address,
+                               std::string device_group_attr_key,
                                const uint32_t num_forward_outputs) {
-  graph.attrs["forward_address"] = std::make_shared<any>(std::move(forward_address));
-  graph.attrs["backward_address"] = std::make_shared<any>(std::move(backward_address));
+  graph.attrs["device_group_attr_key"] =
+      std::make_shared<any>(std::move(device_group_attr_key));
   graph.attrs["num_forward_outputs"] = std::make_shared<any>(std::move(num_forward_outputs));
   return ApplyPass(std::move(graph), "SplitGradientTest");
 }

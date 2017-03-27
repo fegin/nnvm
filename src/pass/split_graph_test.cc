@@ -8,17 +8,20 @@ namespace pass {
 namespace {
 
 Graph SplitGradientTest(Graph src) {
-  const auto& forward_address = src.GetAttr<std::string>("forward_address");
-  const auto& backward_address = src.GetAttr<std::string>("backward_address");
+  const auto& device_group_attr_key =
+      src.GetAttr<std::string>("device_group_attr_key");
   const uint32_t num_forward_outputs = src.GetAttr<uint32_t>("num_forward_outputs");
-  AddressVector addresses;
   const auto& idx = src.indexed_graph();
-  bool is_backward = true;
+  bool is_backward = false;
   for (uint32_t nid = 0, output_idx = 0; nid < idx.num_nodes(); nid++) {
+    const std::unordered_map<std::string, std::string>& dict
+        = idx[nid].source->attrs.dict;
     if (is_backward) {
-      addresses.push_back(backward_address);
+      const_cast<std::unordered_map<std::string, std::string>&>
+          (dict)[device_group_attr_key] = "backward";
     } else {
-      addresses.push_back(forward_address);
+      const_cast<std::unordered_map<std::string, std::string>&>
+          (dict)[device_group_attr_key] = "forward";
       if (idx.outputs()[output_idx].node_id == nid) {
         output_idx += 1;
         if (output_idx >= num_forward_outputs) {
@@ -27,16 +30,14 @@ Graph SplitGradientTest(Graph src) {
       }
     }
   }
-  src.attrs["address"] = std::make_shared<dmlc::any>(std::move(addresses));
+  return src;
 }
 
 NNVM_REGISTER_PASS(SplitGradientTest)
 .describe("Just a test.")
 .set_body(SplitGradientTest)
 .set_change_graph(false)
-.provide_graph_attr("address")
-.depend_graph_attr("forward_address")
-.depend_graph_attr("backward_address")
+.depend_graph_attr("device_group_attr_key")
 .depend_graph_attr("num_forward_outputs");
 }  // namespace
 }  // namespace pass
