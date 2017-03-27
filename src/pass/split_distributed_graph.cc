@@ -23,6 +23,7 @@ struct SplitGraphInputs {
   const Op* net_init_op;
   const Op* net_send_op;
   const Op* net_recv_op;
+  const Op* net_send_sink_op;
   const size_t num_forward_inputs;
   const size_t num_forward_outputs;
   const IndexedGraph& idx;
@@ -315,13 +316,14 @@ Graph SplitDistributedGraph(Graph src) {
     Op::Get(src.GetAttr<std::string>("p2pnet_init_op")),
     Op::Get(src.GetAttr<std::string>("p2pnet_send_op")),
     Op::Get(src.GetAttr<std::string>("p2pnet_recv_op")),
+    Op::Get("P2PNetSendSink"),
     src.GetAttr<size_t>("num_forward_inputs"),
     src.GetAttr<size_t>("num_forward_outputs"),
     src.indexed_graph(),
   };
 
   auto senders_sink = Node::Create();
-  senders_sink->attrs.op = Op::Get("P2PNetSendSink");
+  senders_sink->attrs.op = in.net_send_sink_op;
   senders_sink->attrs.name = "SendersSink";
 
   struct SplitGraphOutputs out = {
@@ -424,7 +426,16 @@ Graph SplitDistributedGraph(Graph src) {
     }
   }
 
-  //CHECK(out.sender_nodes.size() ==  0) << out.sender_nodes.size() << std::endl;
+  for (auto it = out.ret.outputs.begin(); it < out.ret.outputs.end(); it++) {
+    if (it->node->op() == in.net_send_sink_op) {
+      if (it->node->control_deps.size() == 0) {
+        out.ret.outputs.erase(it);
+        out.num_new_forward_outputs--;
+      }
+      break;
+    }
+  }
+
   UpdateGraphAttributes(in, &out);
   std::cout << "SplitDistributedGraph pass finished." << std::endl;
   return out.ret;
