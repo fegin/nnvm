@@ -8,7 +8,6 @@
 #include <nnvm/op_attr_types.h>
 #include <algorithm>
 #include <functional>
-#include <unordered_map>
 
 namespace nnvm {
 namespace pass {
@@ -39,17 +38,19 @@ struct GradEntry {
   NodeEntry sum{nullptr, 0, 0};
 #endif
   std::vector<NodeEntry> grads;
+  bool need_attr_hint{true};
 };
 
 Graph Gradient(Graph src) {
   using nnvm::FGradient;
   using MirrorFun = std::function<int (const Node& node)>;
+  using AttrHintFun = std::function<NodeEntry (const NodeEntry& src, const NodeEntry &like)>;
 
-  CHECK_NE(src.attrs.count("grad_ys"), 0)
+  CHECK_NE(src.attrs.count("grad_ys"), 0U)
       << "Gradient require grad_ys to be presented.";
-  CHECK_NE(src.attrs.count("grad_ys_out_grad"), 0)
+  CHECK_NE(src.attrs.count("grad_ys_out_grad"), 0U)
       << "Gradient require grad_ys_out_grad to be presented.";
-  CHECK_NE(src.attrs.count("grad_xs"), 0)
+  CHECK_NE(src.attrs.count("grad_xs"), 0U)
       << "Gradient require grad_xs to be presented.";
   const std::vector<NodeEntry>& ys =
       src.GetAttr<std::vector<NodeEntry> >("grad_ys");
@@ -66,10 +67,15 @@ Graph Gradient(Graph src) {
   if (src.attrs.count("grad_mirror_fun") != 0) {
     mirror_fun = src.GetAttr<MirrorFun>("grad_mirror_fun");
   }
+  AttrHintFun attr_hint_fun = nullptr;
+  if (src.attrs.count("attr_hint_fun") != 0) {
+    attr_hint_fun = src.GetAttr<AttrHintFun>("attr_hint_fun");
+  }
 
   // topo sort
   std::vector<NodePtr> topo_order;
   std::unordered_map<Node*, std::vector<GradEntry> > output_grads;
+
   DFSVisit(ys, [&](const NodePtr& node) {
       if (output_grads.count(node.get()) == 0) {
         output_grads[node.get()].resize(node->num_outputs());
@@ -79,7 +85,8 @@ Graph Gradient(Graph src) {
 
   CHECK_EQ(ys.size(), ys_out_grad.size());
   for (size_t i = 0; i < ys.size(); ++i) {
-    output_grads[ys[i].node.get()][ys[i].index].grads = { ys_out_grad[i] };
+    NodeEntry ograd = ys_out_grad[i];
+    output_grads[ys[i].node.get()][ys[i].index].grads = { ograd };
   }
 
   // construct mirror reduece memory strategy if needed
@@ -105,36 +112,40 @@ Graph Gradient(Graph src) {
 
   // traverse backward
   static auto& grad_fun_map = Op::GetAttr<FGradient>("FGradient");
+  static auto& finfer_shape = Op::GetAttr<FInferShape>("FInferShape");
+
   std::vector<NodeEntry> out_agg_grads;
   for (auto rit = topo_order.rbegin(); rit != topo_order.rend(); ++rit) {
-    const NodePtr ptr = *rit;
+    const NodePtr& ptr = *rit;
     if (ptr->is_variable()) continue;
     out_agg_grads.clear();
-    for (GradEntry& e : output_grads.at(ptr.get())) {
+    auto& out_grad_vec = output_grads.at(ptr.get());
+    for (uint32_t i = 0; i < out_grad_vec.size(); ++i) {
+      GradEntry& e = out_grad_vec[i];
       e.sum = agg_fun(std::move(e.grads));
+      if (e.need_attr_hint && attr_hint_fun != nullptr) {
+        e.sum = attr_hint_fun(e.sum, NodeEntry{ptr, 0, i});
+      }
       out_agg_grads.push_back(e.sum);
     }
-    const std::vector<NodeEntry>& input_grads = grad_fun_map[ptr->op()]
-        (mirror_map.size() == 0 ? ptr : mirror_map.at(ptr.get()), out_agg_grads);
-    CHECK_EQ(input_grads.size(), ptr->inputs.size())
-        << "Gradient function not returning enough gradient";
-    for (size_t i = 0; i < ptr->inputs.size(); ++i) {
-      const NodePtr in_node = ptr->inputs[i].node;
-      const uint32_t index = ptr->inputs[i].index;
-      output_grads[in_node.get()][index].grads.emplace_back(input_grads[i]);
-    }
-  }
-
-  // Aggregate gradients of each GradEntry
-  for (auto& map_pair : output_grads) {
-    for (GradEntry& grad_entry : map_pair.second) {
-      // Aggregate sum if there haven't been.
-      if (!grad_entry.sum.node) {
-        grad_entry.sum = agg_fun(std::move(grad_entry.grads));
+    if ((*rit)->inputs.size() != 0) {
+      NodePtr fwd_node = (mirror_map.size() == 0 ? ptr : mirror_map.at(ptr.get()));
+      std::vector<NodeEntry> input_grads = grad_fun_map[ptr->op()](
+          fwd_node, out_agg_grads);
+      CHECK_EQ((*rit)->inputs.size(), input_grads.size())
+          << "Gradient function not returning enough gradient";
+      auto git = input_grads.begin();
+      for (auto it = (*rit)->inputs.begin(); it != (*rit)->inputs.end(); ++it, ++git) {
+        auto& ge = output_grads[it->node.get()][it->index];
+        // if any of the backward op can do shape inference, the hint is not necessary.
+        if (finfer_shape.count(git->node->op())) {
+          ge.need_attr_hint = false;
+        }
+        ge.grads.emplace_back(std::move(*git));
       }
     }
   }
-  
+
   // Make the result graph.
   Graph ret;
   // Merge forward graph's outputs. Note that we don't keep the original attributes in
@@ -144,9 +155,15 @@ Graph Gradient(Graph src) {
   ret.outputs.insert(ret.outputs.end(), src.outputs.begin(), src.outputs.end());
   // Also put the xs' grads in the outputs.
   for (const NodeEntry& e : xs) {
-    const GradEntry& entry = output_grads[e.node.get()][e.index];
-    CHECK_NOTNULL(entry.sum.node);
-    ret.outputs.push_back(entry.sum);
+    GradEntry& entry = output_grads[e.node.get()][e.index];
+    // aggregate sum if there haven't been
+    if (entry.sum.node.get() == nullptr) {
+      entry.sum = agg_fun(std::move(entry.grads));
+      if (entry.need_attr_hint && attr_hint_fun != nullptr) {
+        entry.sum = attr_hint_fun(entry.sum, e);
+      }
+    }
+    ret.outputs.emplace_back(std::move(entry.sum));
   }
 
   // Save the entry mapping to the "forward2backward" and "backward2forward" attributes.
@@ -170,11 +187,22 @@ Graph Gradient(Graph src) {
       const uint32_t backward_entid = idxgraph.entry_id(map_pair.second[i].sum);
       forward2backward[forward_entid] = backward_entid;
       backward2forward[backward_entid] = forward_entid;
-      //LOG(INFO) << "Map between: " << forward_entid << " and " << backward_entid;
+      LOG(INFO) << "Map between: " << forward_entid << " and " << backward_entid;
     }
   }
   ret.attrs["forward2backward"] = std::make_shared<any>(std::move(forward2backward));
   ret.attrs["backward2forward"] = std::make_shared<any>(std::move(backward2forward));
+
+  std::cout << "digraph {" << std::endl;
+  const auto& retidx = ret.indexed_graph();
+  for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
+    const auto& n = retidx[nid];
+    for (const auto& in : n.inputs) {
+      std::cout << "\tn" << in.node_id << "_" << retidx[in.node_id].source->attrs.name
+        << " -> n" << nid << "_" << n.source->attrs.name << std::endl;
+    }
+  }
+  std::cout << "}" << std::endl;
 
   return ret;
 }
@@ -184,17 +212,9 @@ NNVM_REGISTER_PASS(Gradient)
 .describe("Return a gradient graph of src.attrs[\"ys\"] wrt src.attrs[\"xs\"]")
 .set_body(Gradient)
 .set_change_graph(true)
-// Output NodeEntry of forward graph.
 .depend_graph_attr("grad_ys")
-// Input NodeEntries of forward graph; also gradient targets.
 .depend_graph_attr("grad_xs")
-// Output gradient NodeEntries of forward graph; also gradient targets.
-.depend_graph_attr("grad_ys_out_grad")
-// A map from forward entry to its corresponding backward entry.
-.provide_graph_attr("forward2backward")
-// A map from backward entry to its corresponding forward entry.
-.provide_graph_attr("backward2forward")
-;
+.depend_graph_attr("grad_ys_out_grad");
 
 }  // namespace
 }  // namespace pass

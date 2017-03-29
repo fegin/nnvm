@@ -438,6 +438,18 @@ Graph SplitDistributedGraph(Graph src) {
 
   UpdateGraphAttributes(in, &out);
   std::cout << "SplitDistributedGraph pass finished." << std::endl;
+
+  std::cout << "digraph {" << std::endl;
+  const auto& retidx = out.ret.indexed_graph();
+  for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
+    const auto& n = retidx[nid];
+    for (const auto& in : n.inputs) {
+      std::cout << "\tn" << in.node_id << "_" << retidx[in.node_id].source->attrs.name
+        << " -> n" << nid << "_" << n.source->attrs.name << std::endl;
+    }
+  }
+  std::cout << "}" << std::endl;
+
   return out.ret;
 }
 

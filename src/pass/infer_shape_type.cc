@@ -7,180 +7,135 @@
 #include <nnvm/op_attr_types.h>
 #include <nnvm/graph_attr_types.h>
 
+using namespace std;
+
 namespace nnvm {
 namespace pass {
 namespace {
 
-template<typename AttrType, typename IsNone, typename FDefault>
+template<typename AttrType, typename FIsNone>
 Graph InferAttr(Graph &&ret,
-                const AttrType empty_val,
-                const char* infer_name,
-                const char* input_name,
-                const char* attr_key_name,
-                const char* attr_name,
-                const char* unknown_name,
-                IsNone fis_none,
-                FDefault fdefault) {
-  using AttrVector = std::vector<AttrType>;
+                const AttrType default_val,
+                const string& infer_name,
+                const string& input_name,
+                const string& attr_key_name,
+                const string& attr_name,
+                const string& unknown_name,
+                FIsNone fis_none) {
+  using AttrVector = vector<AttrType>;
   const IndexedGraph& idx = ret.indexed_graph();
   static auto& finfer_shape =
-      Op::GetAttr<FInferNodeEntryAttr<AttrType> >(infer_name);
-  static auto& is_backward =
-      Op::GetAttr<TIsBackward>("TIsBackward");
-  // gradient function, used to get node correspondence.
-  static auto& fgrad =
-      Op::GetAttr<FGradient>("FGradient");
+      Op::GetAttr<FInferNodeEntryAttr<AttrType>>(infer_name);
+  //static auto& backward_map =
+      //Op::GetAttr<FBackwardOutToInIndex>("FBackwardOutToInIndex");
   // reshape shape vector
-  AttrVector rshape;
-  if (ret.attrs.count(attr_name) != 0) {
-    rshape = ret.MoveCopyAttr<AttrVector>(attr_name);
-  } else {
-    rshape.resize(idx.num_node_entries(), empty_val);
-  }
+  AttrVector inferred(idx.num_node_entries(), default_val);
 
   if (ret.attrs.count(input_name) != 0) {
     const AttrVector& shape_args = ret.GetAttr<AttrVector>(input_name);
     CHECK_LE(shape_args.size(), idx.input_nodes().size())
         << "More provided shapes than number of arguments.";
     for (size_t i = 0; i < shape_args.size(); ++i) {
-      rshape[idx.entry_id(idx.input_nodes()[i], 0)] = shape_args[i];
+      inferred[idx.entry_id(idx.input_nodes()[i], 0)] = shape_args[i];
     }
     // erase the provided arguments
     ret.attrs.erase(input_name);
   }
-
-  std::string shape_attr_key;
+  string shape_attr_key;
   if (ret.attrs.count(attr_key_name) != 0) {
-    shape_attr_key = ret.GetAttr<std::string>(attr_key_name);
+    shape_attr_key = ret.GetAttr<string>(attr_key_name);
     // erase the provided arguments
     ret.attrs.erase(attr_key_name);
   }
-  // Temp space for shape inference.
-  std::vector<AttrType> ishape, oshape;
 
-  // inference step function for nid
-  auto infer_step = [&](uint32_t nid, bool last_iter) {
+  // Temp space for shape inference.
+  vector<AttrType> ishape, oshape;
+  // number of completed nodes
+  size_t num_unknown = 0;
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     const auto& inode = idx[nid];
     const uint32_t num_inputs = inode.inputs.size();
     const uint32_t num_outputs = inode.source->num_outputs();
     if (inode.source->is_variable()) {
       // Variable node. No operator. Only one output entry.
       CHECK(inode.source->op() == nullptr);
-      CHECK_EQ(num_outputs, 1U);
+      CHECK_EQ(num_outputs, 1);
       const uint32_t out_ent_id = idx.entry_id(nid, 0);
-      if (shape_attr_key.length() != 0 && fis_none(rshape[out_ent_id])) {
+      if (shape_attr_key.length() != 0 && fis_none(inferred[out_ent_id])) {
         auto it = inode.source->attrs.dict.find(shape_attr_key);
         if (it != inode.source->attrs.dict.end()) {
-          std::istringstream is(it->second);
-          CHECK(is >> rshape[out_ent_id]) << "Invalid attribute";
+          istringstream is(it->second);
+          CHECK(is >> inferred[out_ent_id]) << "Invalid attribute";
         }
       }
-    } else if (is_backward.get(inode.source->op(), false)) {
-      CHECK_GE(inode.control_deps.size(), 1U)
-        << "BackwardOp need to have control_deps to its forward op";
-      const IndexedGraph::Node& fnode = idx[inode.control_deps[0]];
-      NodePtr fwd_ptr = inode.source->control_deps[0];
-      // use gradient function to find out the correspondence.
-      std::vector<NodeEntry> ograd(fwd_ptr->num_outputs());
-      for (size_t i = 0; i < ograd.size(); ++i) {
-        ograd[i].index = static_cast<uint32_t>(i);
-      }
-      // input gradient list
-      auto igrad = fgrad[fwd_ptr->op()](fwd_ptr, ograd);
-      const Op* backward_op = inode.source->op();
-      const Node* igrad_node = nullptr;
-      // Input gradient assignement
-      for (size_t i = 0; i < igrad.size(); ++i) {
-        if (igrad[i].node->op() == backward_op) {
-          uint32_t eid = idx.entry_id(nid, igrad[i].index);
-          if (fis_none(rshape[eid])) {
-            rshape[eid] = rshape[idx.entry_id(fnode.inputs[i])];
-          } else {
-            CHECK_EQ(rshape[eid], rshape[idx.entry_id(fnode.inputs[i])])
-                << "Backward shape inconsistent with the forward shape";
-          }
-          if (igrad_node == nullptr) {
-            igrad_node = igrad[i].node.get();
-          } else {
-            CHECK(igrad_node == igrad[i].node.get());
-          }
-        }
-      }
-      // out grad entries
-      for (size_t i = 0; i < igrad_node->inputs.size(); ++i) {
-        const NodeEntry& e = igrad_node->inputs[i];
-        if (e.node == nullptr) {
-          uint32_t eid = idx.entry_id(inode.inputs[i]);
-          if (fis_none(rshape[eid])) {
-            rshape[eid] = rshape[idx.entry_id(inode.control_deps[0], e.index)];
-          }
-        }
-      }
-    } else {
-      bool forward_known = true;
+    } else if (finfer_shape.count(inode.source->op())) {
       // Forward operator inference.
-      ishape.resize(num_inputs, empty_val);
+      ishape.resize(num_inputs, default_val);
       for (uint32_t i = 0; i < ishape.size(); ++i) {
-        ishape[i] = rshape[idx.entry_id(inode.inputs[i])];
-        if (fis_none(ishape[i])) forward_known = false;
+        ishape[i] = inferred[idx.entry_id(inode.inputs[i])];
       }
-      oshape.resize(num_outputs, empty_val);
+      oshape.resize(num_outputs, default_val);
       for (uint32_t i = 0; i < oshape.size(); ++i) {
-        oshape[i] = rshape[idx.entry_id(nid, i)];
-        if (fis_none(oshape[i])) forward_known = false;
+        oshape[i] = inferred[idx.entry_id(nid, i)];
       }
-      auto finfer = finfer_shape.get(inode.source->op(), fdefault);
+      // Call inference function of the operator.
+      bool forward_known = finfer_shape[inode.source->op()](
+          inode.source->attrs, &ishape, &oshape);
       if (!forward_known) {
-        if (finfer != nullptr) {
-          // Call inference function of the operator.
-          try {
-            forward_known = finfer(inode.source->attrs, &ishape, &oshape);
-          } catch (const std::exception& e) {
-            throw dmlc::Error("Error in operator " + inode.source->attrs.name + ": " + e.what());
-          }
-        } else {
-          CHECK(!last_iter)
-              << "Attribute " << infer_name
-              << " is not registed by op " << inode.source->op()->name
-              << " we are not able to complete the inference because of this";
-        }
+        ++num_unknown;
       }
       // Save to the result map.
       for (uint32_t i = 0; i < num_inputs; ++i) {
-        rshape[idx.entry_id(inode.inputs[i])] = ishape[i];
+        inferred[idx.entry_id(inode.inputs[i])] = ishape[i];
       }
       for (uint32_t i = 0; i < num_outputs; ++i) {
-        rshape[idx.entry_id(nid, i)] = oshape[i];
+        inferred[idx.entry_id(nid, i)] = oshape[i];
       }
     }
-  };
-
-  size_t last_num_unknown;
-  size_t num_unknown = rshape.size();
-  int i = 0;
-  do {
-    if (i % 2 == 0) {
-      for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
-        infer_step(nid, false);
+    /*else if (backward_map.count(inode.source->op())) {
+      // Backward operator inference.
+      CHECK_GE(inode.control_deps.size(), 1)
+          << "BackwardOp need to have control_deps to its forward op";
+      const uint32_t fnode_id = inode.control_deps[0];
+      const IndexedGraph::Node& fnode = idx[fnode_id];
+      // Inference the outputs of backward operator (equal to the inputs
+      // of its corresponding forward operator).
+      const vector<uint32_t>& out_map =
+          backward_map[inode.source->op()](inode.source->attrs);
+      bool known = true;
+      for (size_t i = 0; i < out_map.size(); ++i) {
+        CHECK_LT(out_map[i], fnode.inputs.size());
+        const uint32_t fwd_in_ent_id = idx.entry_id(fnode.inputs[out_map[i]]);
+        const uint32_t bwd_out_ent_id = idx.entry_id(nid, i);
+        inferred[bwd_out_ent_id] = inferred[fwd_in_ent_id];
+        if (fis_none(inferred[bwd_out_ent_id])) {
+          // Still unknown due to the forward shape is also unknown.
+          known = false;
+        }
       }
-    } else {
-      // backward inference
-      for (uint32_t i = idx.num_nodes(); i != 0; --i) {
-        infer_step(i - 1, false);
+      num_unknown += !known;
+    }*/
+  }
+  // Inference & check shapes using gradient entry mapping if available.
+  if (ret.attrs.count("forward2backward") != 0) {
+    const unordered_map<uint32_t, uint32_t>& forward2backward
+      = ret.GetAttr<unordered_map<uint32_t, uint32_t>>("forward2backward");
+    for (const auto& fwd2bwd : forward2backward) {
+      const uint32_t fwd_ent_id = fwd2bwd.first;
+      const uint32_t bwd_ent_id = fwd2bwd.second;
+      if (fis_none(inferred[bwd_ent_id])) {
+        inferred[bwd_ent_id] = inferred[fwd_ent_id];
+      } else {
+        CHECK_EQ(inferred[bwd_ent_id], inferred[fwd_ent_id])
+          << inferred[bwd_ent_id] << " v.s. " << inferred[fwd_ent_id]
+          << " Backward entry (#" << bwd_ent_id << ") should have the same infer value"
+          << " with its corresponding forward (#" << fwd_ent_id << ") entry.";
       }
     }
-    last_num_unknown = num_unknown;
-    num_unknown = 0;
-    for (size_t j = 0; j < idx.num_node_entries(); ++j) {
-      if (fis_none(rshape[j])) {
-        ++num_unknown;
-      }
-    }
-    ++i;
-  } while (num_unknown > 0 && last_num_unknown > num_unknown);
+  }
   // set the shapes
-  ret.attrs[attr_name] = std::make_shared<any>(std::move(rshape));
-  // number of nodes who knows the shape.
+  ret.attrs[attr_name] = std::make_shared<any>(std::move(inferred));
+  // Number of entries that could not be inferred from this pass.
   ret.attrs[unknown_name] = std::make_shared<any>(num_unknown);
   return ret;
 }
@@ -192,48 +147,19 @@ NNVM_REGISTER_PASS(InferShape)
         std::move(ret), TShape(),
         "FInferShape", "shape_inputs", "shape_attr_key",
         "shape", "shape_num_unknown_nodes",
-        [](const TShape& s) { return s.ndim() == 0 || s.Size() == 0; },
-        nullptr);
+        [](const TShape& s) { return s.ndim() == 0; });
   })
 .set_change_graph(false)
 .provide_graph_attr("shape");
-
-// inference fucntion for same type
-inline bool SameType(const NodeAttrs& attrs,
-                     std::vector<int> *iattr,
-                     std::vector<int> *oattr) {
-  int def_v = -1;
-  for (int v : *oattr) {
-    if (v != -1) {
-      def_v = v; break;
-    }
-  }
-  if (def_v == -1) {
-    for (int v : *iattr) {
-      if (v != -1) {
-        def_v = v; break;
-      }
-    }
-  }
-  if (def_v == -1) return false;
-  for (int& v : *oattr) {
-    v = def_v;
-  }
-  for (int& v : *iattr) {
-    v = def_v;
-  }
-  return true;
-}
 
 NNVM_REGISTER_PASS(InferType)
 .describe("Infer the dtype of each node entries.")
 .set_body([](Graph ret) {
     return InferAttr<int>(
-        std::move(ret), -1,
+        std::move(ret), 0,
         "FInferType", "dtype_inputs", "dtype_attr_key",
         "dtype", "dtype_num_unknown_nodes",
-        [](const int t) { return t == -1; },
-        SameType);
+        [](const int t) { return t == -1; });
   })
 .set_change_graph(false)
 .provide_graph_attr("dtype");

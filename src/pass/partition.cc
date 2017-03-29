@@ -548,7 +548,11 @@ void NeuralLevels::Print() const {
         ostringstream oss;
         oss << "\t{";
         for (const uint32_t entid : (*entry_groups_)[groupid]) {
-          oss << "#" << entid << ": " << shapes[entid] << ", ";
+          oss << "#" << entid << ": " << shapes[entid];
+          //for (const uint32_t nid : entry_to_nodes_[entid]) {
+            //oss << "n#" << nid << "|";
+          //}
+          oss << ", ";
         }
         LOG(INFO) << oss.str() << "},";
       }
@@ -1772,11 +1776,13 @@ Graph GraphPartitioner::Run() {
       n->attrs = attrs;
       n->attrs.name = node->attrs.name + "_" + std::to_string(i);
       // Control dependencies.
+      // TODO(minjie): Control dependencies are ignored.
+      /*
       for (NodePtr depend_node : node->control_deps) {
         const uint32_t depend_nid = graph.node_id(depend_node.get());
         CHECK_LT(depend_nid, nodeid);
         n->control_deps.push_back(splitted_nodes[depend_nid][i]);
-      }
+      }*/
       AssignDevice(n, i);
       FinalizeNodeCreation(n);
       splitted_nodes[nodeid].push_back(n);

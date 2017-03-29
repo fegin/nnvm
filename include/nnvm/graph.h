@@ -144,6 +144,14 @@ class IndexedGraph {
     return node2index_.at(node);
   }
   /*!
+   * \brief Return true if the node pointer exists in the graph.
+   * \param node The Node pointer.
+   * \return true if the node pointer exists in the graph.
+   */
+  inline bool has_node(const nnvm::Node* node) const {
+    return node2index_.find(node) != node2index_.end();
+  }
+  /*!
    * \brief Get the corresponding Node structure for a given node_id.
    * \param node_id The node id
    * \return const reference to the corresponding IndexedGraph::Node
