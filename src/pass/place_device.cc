@@ -126,6 +126,9 @@ Graph PlaceDevice(Graph src) {
       has_multiple_device = true;
     }
   }
+  for (int nid = 0; nid < idx.num_nodes(); ++nid) {
+    LOG(INFO) << "Node #" << nid << " on device " << device[nid];
+  }
 
   if (!has_multiple_device) {
     src.attrs.erase("device_group_attr_key");

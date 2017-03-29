@@ -249,12 +249,12 @@ inline void FinalizeNodeCreation(NodePtr node) {
 }
 
 inline void AssignDevice(NodePtr node, size_t device_group_id) {
-  node->attrs.dict["ctx_group"] = "group:" + std::to_string(device_group_id);
+  node->attrs.dict["__ctx_group__"] = "group:" + std::to_string(device_group_id);
 }
 
 #define CHECK_ONDEVICE(ent, dev) \
-  CHECK_EQ((ent).node->attrs.dict["ctx_group"], "group:" + std::to_string((dev))) \
-  << (ent).node->attrs.dict["ctx_group:"] << " v.s. " << (dev)
+  CHECK_EQ((ent).node->attrs.dict["__ctx_group__"], "group:" + std::to_string((dev))) \
+  << (ent).node->attrs.dict["__ctx_group__:"] << " v.s. " << (dev)
 
 template<typename T>
 inline vector<int> GetDevId(const vector<T>& inputs) {
