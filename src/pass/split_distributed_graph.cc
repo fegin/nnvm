@@ -177,6 +177,7 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
     const auto& sender_address = in.address_vec[sender_old_nid];
     const std::string net_id =
       CreateIdentity(sender_address + std::to_string(sender_old_nid) +
+                     node_address + std::to_string(old_nid) +
                      std::to_string(i));
     const auto& it = out->copy_op_map.find(in.idx.entry_id(input_ientry));
     if (it != out->copy_op_map.end()) {
