@@ -252,6 +252,10 @@ inline void AssignDevice(NodePtr node, size_t device_group_id) {
   node->attrs.dict["__ctx_group__"] = "group:" + std::to_string(device_group_id);
 }
 
+inline void AssignDevice(NodePtr node, const string& group) {
+  node->attrs.dict["__ctx_group__"] = group;
+}
+
 #define CHECK_ONDEVICE(ent, dev) \
   CHECK_EQ((ent).node->attrs.dict["__ctx_group__"], "group:" + std::to_string((dev))) \
   << (ent).node->attrs.dict["__ctx_group__:"] << " v.s. " << (dev)
@@ -1724,6 +1728,7 @@ Graph GraphPartitioner::Run() {
         // TODO(minjie): how to set variable node's parsed attribute?
         // Control dependency.
         zeronode->control_deps.push_back(node);
+        AssignDevice(node, default_group_);  // The original node is assigned to the default group.
         AssignDevice(zeronode, entry_grids[out_ent_id].BlockAt(i).device_group_id);
         FinalizeNodeCreation(zeronode);
         // Output entry and shape.
@@ -1847,6 +1852,7 @@ Graph GraphPartitioner::Run() {
       // Add control dependencies.
       out_node_copy->control_deps.push_back(entry_grids[entid].BlockAt(i).entry.node);
     }
+    AssignDevice(out_node_copy, default_group_);  // The original node is assigned to the default group.
     ret.outputs.push_back(NodeEntry{out_node_copy, 0, 0});
   }
   const IndexedGraph& retgraph = ret.indexed_graph();

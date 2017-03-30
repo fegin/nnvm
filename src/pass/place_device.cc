@@ -126,9 +126,6 @@ Graph PlaceDevice(Graph src) {
       has_multiple_device = true;
     }
   }
-  for (int nid = 0; nid < idx.num_nodes(); ++nid) {
-    LOG(INFO) << "Node #" << nid << " on device " << device[nid];
-  }
 
   if (!has_multiple_device) {
     src.attrs.erase("device_group_attr_key");
@@ -283,9 +280,12 @@ Graph PlaceDevice(Graph src) {
   if (src.attrs.count("dtype") != 0) {
     RemapEntryAttributes<int>(src, &ret, new_node_map, "dtype");
   }
+  for (size_t i = 0; i < ret.indexed_graph().num_nodes(); ++i) {
+    LOG(INFO) << "Node #" << i << " " << ret.indexed_graph()[i].source->attrs.name << " on " << new_device_vec[i];
+  }
   ret.attrs["device"] = std::make_shared<any>(std::move(new_device_vec));
 
-  /*cout << "digraph {" << endl;
+  cout << "digraph {" << endl;
   const auto& retidx = ret.indexed_graph();
   for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
     const auto& n = retidx[nid];
@@ -294,7 +294,7 @@ Graph PlaceDevice(Graph src) {
            << " -> n" << nid << "_" << n.source->attrs.name << endl;
     }
   }
-  cout << "}" << endl;*/
+  cout << "}" << endl;
 
   return ret;
 }

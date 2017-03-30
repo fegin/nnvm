@@ -66,6 +66,7 @@ Graph PartitionPass(Graph src) {
     src.GetAttr<unordered_map<uint32_t, uint32_t>>("backward2forward");
   const int num_devices = src.GetAttr<int>("num_devices");
   const int num_cuts = GetNumCuts(num_devices);
+  const string& default_group = src.GetAttr<string>("default_group");
   LOG(INFO) << "Number of cuts: " << num_cuts;
 
   const IndexedGraph& graph = src.indexed_graph();
@@ -113,7 +114,11 @@ Graph PartitionPass(Graph src) {
 
   // Graph partitioner.
   CHECK_NOTNULL(tiling);
-  GraphPartitioner pttn(*tiling, &src, CommPlanner::kDefaultPlanner, num_devices);
+  GraphPartitioner pttn(
+      *tiling, &src,
+      CommPlanner::kDefaultPlanner,
+      num_devices,
+      default_group);
 
   //return src;
   const Graph& ret = pttn.Run();
@@ -129,6 +134,7 @@ NNVM_REGISTER_PASS(PartitionPass)
 .depend_graph_attr("forward2backward")  // Gradient information from GradientPass.
 .depend_graph_attr("backward2forward")  // Gradient information from GradientPass.
 .depend_graph_attr("num_devices")  // Number of devices
+.depend_graph_attr("default_group")
 .depend_op_attr("FAlignedSchemes")  // Require op to provide aligned schemes.
 .set_change_graph(true);
 

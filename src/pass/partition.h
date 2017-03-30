@@ -405,8 +405,10 @@ class Grid {
 class GraphPartitioner {
  public:
   GraphPartitioner(const Tiling& tiling, Graph* src,
-      const std::string& comm_name, size_t num_devices):
-    tiling_(tiling), src_graph_(src), num_devices_(num_devices) {
+      const std::string& comm_name, size_t num_devices,
+      const std::string& default_group):
+    tiling_(tiling), src_graph_(src), num_devices_(num_devices),
+    default_group_(default_group) {
     comm_planner_ = CommPlanner::CreatePlanner(comm_name);
   }
 
@@ -451,6 +453,7 @@ class GraphPartitioner {
   Graph* src_graph_;
   std::unique_ptr<CommPlanner> comm_planner_;
   const size_t num_devices_;
+  const std::string default_group_;
 
   std::unordered_map<NodePtr, std::vector<TShape>> node_output_shapes_;
 };
