@@ -160,18 +160,10 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
             in.idx[old_nid].source->op() == in.copy_op)
           << input_node->attrs.name << "=" << input_address << ", "
           << new_node->attrs.name << "=" << node_address;
-      if (SameNetAddress(node_address, in.localhost)) {
-        if (input_node->is_variable()) {
-          NodePtr variable_node = in.idx[old_nid].source->inputs[i].node;
-          out->old_nid_to_new_node[input_ientry.node_id] = variable_node;
-          out->new_node_to_old_nid[variable_node.get()] = input_ientry.node_id;
-          // Very hacky. Every variables must depend on NetInit node.
-          // Otherwise, it is possible that NetInit_redundant_var will be placed
-          // to "backward" input.
-          variable_node->control_deps.push_back(net_init_entry.node);
-        }
+      if (SameNetAddress(node_address, in.localhost) &&
+          SameNetAddress(input_address, in.localhost)) {
         CreateInputEntry(new_node,
-                         out->old_nid_to_new_node[input_ientry.node_id],
+                         out->old_nid_to_new_node.at(input_ientry.node_id),
                          true, input_ientry);
       }
       continue;
@@ -183,8 +175,9 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
     const auto& sender_inode = input_inode.inputs[0];
     const auto& sender_old_nid = sender_inode.node_id;
     const auto& sender_address = in.address_vec[sender_old_nid];
-    const std::string net_id = CreateIdentity(input_node->attrs.name +
-                                              sender_address);
+    const std::string net_id =
+      CreateIdentity(sender_address + std::to_string(sender_old_nid) +
+                     std::to_string(i));
     const auto& it = out->copy_op_map.find(in.idx.entry_id(input_ientry));
     if (it != out->copy_op_map.end()) {
       // No need to do anything if the corresponding op is sender.
@@ -199,7 +192,8 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
       CHECK(in.idx[sender_old_nid].source->op() != in.net_init_op &&
             in.idx[sender_old_nid].source->op() != in.net_send_op &&
             in.idx[sender_old_nid].source->op() != in.net_recv_op);
-      CreateInputEntry(new_node, out->old_nid_to_new_node[input_ientry.node_id],
+      CreateInputEntry(new_node,
+                       out->old_nid_to_new_node.at(input_ientry.node_id),
                        true, input_ientry);
     } else if (SameNetAddress(node_address, in.localhost)) {
       if (in.idx[old_nid].source->op() != in.net_recv_op) {
@@ -215,7 +209,7 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
         // cause some problems.
         auto new_input_entry =
             CreateInputEntry(new_node, recv_node, false, input_ientry);
-        auto copy_node = out->old_nid_to_new_node[input_ientry.node_id];
+        auto copy_node = out->old_nid_to_new_node.at(input_ientry.node_id);
         out->new_node_to_old_nid.erase(copy_node.get());
         out->old_nid_to_new_node[input_ientry.node_id] = recv_node;
         out->new_node_to_old_nid[recv_node.get()] = input_ientry.node_id;
@@ -224,14 +218,15 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
     } else if (SameNetAddress(sender_address, in.localhost)) {
       CHECK(!SameNetAddress(input_address, in.localhost));
       NodePtr sender_node =
-          out->old_nid_to_new_node[in.idx.node_id(input_node->inputs[0].node.get())];
+          out->old_nid_to_new_node.at(
+              in.idx.node_id(input_node->inputs[0].node.get()));
       if (in.idx[sender_old_nid].source->op() != in.net_send_op) {
         // Inserts a net_send_op node to replace the copy_op node.
         sender_node = CreateNetSendNode(
                           net_init_entry,
-                          NodeEntry{out->old_nid_to_new_node[sender_old_nid],
-                                     sender_inode.index,
-                                     sender_inode.version},
+                          NodeEntry{out->old_nid_to_new_node.at(sender_old_nid),
+                                    sender_inode.index,
+                                    sender_inode.version},
                           node_address, net_id, in.net_send_op);
       }
       const auto sender_entry = NodeEntry{sender_node, 0, 0};
@@ -371,19 +366,45 @@ Graph SplitDistributedGraph(Graph src) {
     NodePtr new_node = nullptr;
 
     if (SameNetAddress(node_address, in.localhost)) {
-      if (!in.idx[old_nid].source->is_variable()) {
-        new_node = Node::Create();
-        new_node->attrs = in.idx[old_nid].source->attrs;
-        for (size_t i = 0; i < in.idx[old_nid].control_deps.size(); ++i) {
-          uint32_t old_depend_nid = in.idx[old_nid].control_deps[i];
-          if (SameNetAddress(in.address_vec[old_depend_nid], in.localhost)) {
-            new_node->control_deps.push_back(
-                out.old_nid_to_new_node[old_depend_nid]);
+      if (in.idx[old_nid].source->is_variable()) {
+        // FIXME: This is very hacky. Any better way to get NodePtr ?
+        for (uint32_t nid = 0; nid < in.idx.num_nodes(); ++nid) {
+          for (uint32_t control_idx = 0;
+               control_idx < in.idx[nid].control_deps.size(); ++control_idx) {
+            if (in.idx[nid].control_deps[control_idx] == old_nid) {
+              new_node = in.idx[nid].source->control_deps[control_idx];
+              break;
+            }
+          }
+          if (new_node != nullptr) {
+            break;
+          }
+          for (uint32_t input_idx = 0;
+               input_idx < in.idx[nid].inputs.size(); ++input_idx) {
+            if (in.idx[nid].inputs[input_idx].node_id == old_nid) {
+              new_node = in.idx[nid].source->inputs[input_idx].node;
+              break;
+            }
           }
         }
-        out.old_nid_to_new_node[old_nid] = new_node;
-        out.new_node_to_old_nid[new_node.get()] = old_nid;
+        CHECK(new_node != nullptr);
+        // Very hacky. Every variables must depend on NetInit node.
+        // Otherwise, it is possible that NetInit_redundant_var will be placed
+        // to "backward" input.
+        new_node->control_deps.push_back(net_init_entry.node);
+      } else {
+        new_node = Node::Create();
+        new_node->attrs = in.idx[old_nid].source->attrs;
       }
+      for (size_t i = 0; i < in.idx[old_nid].control_deps.size(); ++i) {
+        uint32_t old_depend_nid = in.idx[old_nid].control_deps[i];
+        if (SameNetAddress(in.address_vec[old_depend_nid], in.localhost)) {
+          new_node->control_deps.push_back(
+              out.old_nid_to_new_node.at(old_depend_nid));
+        }
+      }
+      out.old_nid_to_new_node[old_nid] = new_node;
+      out.new_node_to_old_nid[new_node.get()] = old_nid;
     }
     if (in.idx[old_nid].source->is_variable()) {
       num_input_encountered++;
