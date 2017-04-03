@@ -7,9 +7,59 @@ namespace nnvm {
 namespace pass {
 namespace {
 
-class SimpleCommPlanner : public CommPlanner {
+void LogBroadcast(const vector<int>& source, const vector<int>& target,
+      const vector<CommPlanner::BroadcastStage>& stages, ostream& oss) {
+  oss << "Broadcast: [";
+  for (const int src : source) {
+    oss << src << " ";
+  }
+  oss << "] -> [";
+  for (const int tgt : target) {
+    oss << tgt << " ";
+  }
+  oss << "]";
+  //LOG(INFO) << oss.str();
+  oss << "\nPlan:\n";
+  for (size_t i = 0; i < stages.size(); ++i) {
+    oss << "\tStage #" << i << ": ";
+    for (const auto& bcast : stages[i].broadcasts) {
+      oss << bcast.from << " -> [";
+      for (int t : bcast.to) {
+        oss << t << " ";
+      }
+      oss << "]; ";
+    }
+    oss << endl;
+  }
+  oss.flush();
+}
+
+void LogReduce(const vector<int>& source, int target,
+      const vector<CommPlanner::ReduceStage>& stages, ostream& oss) {
+  oss << "Reduce: [";
+  for (const int src : source) {
+    oss << src << " ";
+  }
+  oss << "] -> " << target;
+  //LOG(INFO) << oss.str();
+  oss << "\nPlan:\n";
+  for (size_t i = 0; i < stages.size(); ++i) {
+    oss << "\tStage #" << i << ": ";
+    for (const auto& red : stages[i].reduces) {
+      oss << "[";
+      for (int f : red.from) {
+        oss << f << " ";
+      }
+      oss << "] +> " << red.to << "; ";
+    }
+    oss << endl;
+  }
+  oss.flush();
+}
+
+class Special16CardsCommPlanner : public CommPlanner {
  public:
-  explicit SimpleCommPlanner(const Connectivity& connectivity):
+  explicit Special16CardsCommPlanner(const Connectivity& connectivity):
     connectivity_(connectivity), comm_plan_logs_("comm.log") {
     if (connectivity_.empty()) {
       for (int dev = 0; dev < 16; ++dev) {
@@ -63,7 +113,7 @@ class SimpleCommPlanner : public CommPlanner {
       }
     }
 
-    LogReduce(source, target, plan);
+    LogReduce(source, target, plan, comm_plan_logs_);
 
     return plan;
   }
@@ -174,7 +224,7 @@ class SimpleCommPlanner : public CommPlanner {
       }
     }
 
-    LogBroadcast(source, target, plan);
+    LogBroadcast(source, target, plan, comm_plan_logs_);
     
     return plan;
   }
@@ -198,74 +248,90 @@ class SimpleCommPlanner : public CommPlanner {
     return plan;
   }
 
-  void LogReduce(const vector<int>& source, int target,
-      const vector<ReduceStage>& stages) {
-    ostringstream oss;
-    oss << "Reduce: [";
-    for (const int src : source) {
-      oss << src << " ";
-    }
-    oss << "] -> " << target;
-    //LOG(INFO) << oss.str();
-    oss << "\nPlan:\n";
-    for (size_t i = 0; i < stages.size(); ++i) {
-      oss << "\tStage #" << i << ": ";
-      for (const auto& red : stages[i].reduces) {
-        oss << "[";
-        for (int f : red.from) {
-          oss << f << " ";
-        }
-        oss << "] +> " << red.to << "; ";
-      }
-      oss << endl;
-    }
-    comm_plan_logs_ << oss.str();
-    comm_plan_logs_.flush();
-  }
+ private:
+  Connectivity connectivity_;
+  ofstream comm_plan_logs_;
+};
 
-  void LogBroadcast(const vector<int>& source, const vector<int>& target,
-      const vector<BroadcastStage>& stages) {
-    ostringstream oss;
-    oss << "Broadcast: [";
-    for (const int src : source) {
-      oss << src << " ";
-    }
-    oss << "] -> [";
-    for (const int tgt : target) {
-      oss << tgt << " ";
-    }
-    oss << "]";
-    //LOG(INFO) << oss.str();
-    oss << "\nPlan:\n";
-    for (size_t i = 0; i < stages.size(); ++i) {
-      oss << "\tStage #" << i << ": ";
-      for (const auto& bcast : stages[i].broadcasts) {
-        oss << bcast.from << " -> [";
-        for (int t : bcast.to) {
-          oss << t << " ";
+class AllToAllCommPlanner : public CommPlanner {
+ public:
+  explicit AllToAllCommPlanner():
+    comm_plan_logs_("comm.log") {
+  }
+  vector<ReduceStage> ReducePlan(const vector<int>& source, int target) override {
+    vector<ReduceStage> plan;
+    plan.resize(1);
+    plan[0].reduces.emplace_back(source, target);
+
+    LogReduce(source, target, plan, comm_plan_logs_);
+
+    return plan;
+  }
+  vector<BroadcastStage> BroadcastPlan(const vector<int>& source,
+                                       const vector<int>& target) override {
+
+    vector<int> fetch_from(target.size(), -1);
+    // First: try local fetch.
+    for (size_t i = 0; i < target.size(); ++i) {
+      for (size_t j = 0; j < source.size(); ++j) {
+        if (target[i] == source[j]) {
+          fetch_from[i] = source[j];
+          break;
         }
-        oss << "]; ";
       }
-      oss << endl;
     }
-    comm_plan_logs_ << oss.str();
-    comm_plan_logs_.flush();
+    // Second: Fetch within group.
+    {
+      size_t offset = 0;
+      for (size_t i = 0; i < target.size(); ++i) {
+        if (fetch_from[i] != -1) {
+          continue;
+        }
+        fetch_from[i] = source[offset];
+        offset = (offset + 1) % source.size();
+      }
+    }
+    // Make plan.
+    vector<BroadcastStage> plan(1);
+    for (const int src : source) {
+      vector<int> push_to;
+      for (size_t i = 0; i < target.size(); ++i) {
+        if (fetch_from[i] == src) {
+          push_to.push_back(target[i]);
+        }
+      }
+      if (!push_to.empty()) {
+        plan[0].broadcasts.emplace_back(src, std::move(push_to));
+      }
+    }
+
+    LogBroadcast(source, target, plan, comm_plan_logs_);
+
+    return plan;
+  }
+  vector<int> CommPlan(int source, int target) override {
+    // Direct transfer.
+    return vector<int>();
   }
 
  private:
-  Connectivity connectivity_;
   ofstream comm_plan_logs_;
 };
 
 }  // namespace
 
 const string CommPlanner::kDefaultPlanner = "default";
+const string CommPlanner::kSpecial16Cards = "special16cards";
 
 unique_ptr<CommPlanner> CommPlanner::CreatePlanner(
-    const string& ,
+    const string& name,
     const Connectivity& connectivity) {
   // name is currently not used.
-  return unique_ptr<CommPlanner>(new SimpleCommPlanner(connectivity));
+  if (name == kDefaultPlanner) {
+    return unique_ptr<CommPlanner>(new AllToAllCommPlanner());
+  } else {
+    return unique_ptr<CommPlanner>(new Special16CardsCommPlanner(connectivity));
+  }
 }
 
 }  // namespace pass

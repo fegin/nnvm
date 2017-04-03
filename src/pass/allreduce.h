@@ -18,6 +18,7 @@ class CommPlanner {
  public:
   typedef std::unordered_map<int, std::unordered_set<int>> Connectivity;
   const static std::string kDefaultPlanner;
+  const static std::string kSpecial16Cards;
   struct Reduce {
     std::vector<int> from;
     int to;
