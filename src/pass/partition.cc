@@ -1448,7 +1448,7 @@ void GraphPartitioner::BroadcastEntries(
     // one in and one output, the entry is directly assigned, leading to entry with different
     // device. Though this is still good since PlaceDevice pass will fix it. It is still
     // better to remove that case and put an explicit copy in it.
-    //CHECK_ONDEVICE((*dev_entries)[tgt], tgt);
+    CHECK_ONDEVICE((*dev_entries)[tgt], tgt);
   }
 }
 

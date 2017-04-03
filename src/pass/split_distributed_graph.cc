@@ -388,6 +388,8 @@ Graph SplitDistributedGraph(Graph src) {
 
   for (uint32_t old_nid = 0, old_output_idx = 0, new_output_idx = 0;
        old_nid < in.idx.num_nodes(); ++old_nid) {
+    LOG(INFO) << "Node #" << old_nid << " "
+      << in.idx[old_nid].source->attrs.name;
     // Always creates a new node for local nodes even if it may be discarded
     // later, e.g, a copy node between two machines. There is one exception!!
     // MXNet implicitly assumes that variables can not be changed.  As a result,
