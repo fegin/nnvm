@@ -123,9 +123,34 @@ static NodePtr CreateNetRecvNode(const NodeEntry& init_node,
   return node;
 }
 
-static std::string CreateIdentity(const std::string& seed) {
-  size_t id = (std::hash<std::string>{}(seed)) % 10000000 + 90000000;
-  return std::to_string(id);
+static std::string CreateIdentity(const std::string& seed1,
+                                  const std::string& seed2,
+                                  const std::string& seed3,
+                                  const std::string& seed4,
+                                  const std::string& seed5) {
+  static std::map<std::string, std::string[5]> id_map;
+  size_t id =
+    ((std::hash<std::string>{}(seed1) ^
+      std::hash<std::string>{}(seed2) ^
+      std::hash<std::string>{}(seed3) ^
+      std::hash<std::string>{}(seed4) ^
+      std::hash<std::string>{}(seed5)) << 1) % 100000000 + 90000000;
+  std::string ret = std::to_string(id);
+  if (id_map.count(ret) > 0) {
+    std::cout << "Duplicated id : " << ret << std::endl
+              << seed1 << " " << seed2 << " " << seed3 << " " << seed4 << " " << seed5
+              << std::endl
+              << id_map[ret][0] << " " << id_map[ret][1] << " " << id_map[ret][2] << " "
+              << id_map[ret][3] << " " << id_map[ret][4]
+              << std::endl;
+    CHECK(id_map.count(ret) == 0);
+  }
+  id_map[ret][0] = seed1;
+  id_map[ret][1] = seed2;
+  id_map[ret][2] = seed3;
+  id_map[ret][3] = seed4;
+  id_map[ret][4] = seed5;
+  return ret;
 }
 
 static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
@@ -176,9 +201,13 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
     const auto& sender_old_nid = sender_inode.node_id;
     const auto& sender_address = in.address_vec[sender_old_nid];
     const std::string net_id =
-      CreateIdentity(sender_address + std::to_string(sender_old_nid) +
-                     node_address + std::to_string(old_nid) +
-                     std::to_string(i));
+      //CreateIdentity(std::to_string(sender_old_nid) + sender_address +
+                     //std::to_string(i) +
+                     //node_address + std::to_string(old_nid));
+      CreateIdentity(std::to_string(sender_old_nid), sender_address,
+                     std::to_string(i),
+                     node_address, std::to_string(old_nid));
+
     const auto& it = out->copy_op_map.find(in.idx.entry_id(input_ientry));
     if (it != out->copy_op_map.end()) {
       // No need to do anything if the corresponding op is sender.
