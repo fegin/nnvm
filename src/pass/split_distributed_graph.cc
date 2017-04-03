@@ -32,13 +32,13 @@ struct SplitGraphInputs {
 struct SplitGraphOutputs {
   Graph ret;
   OutputIdxMap output_idx_reverse_map;
-  std::vector<NodePtr> sender_nodes;
   NodeEntry senders_sink;
   std::map<uint32_t, NodePtr> old_nid_to_new_node;
   std::map<Node*, uint32_t> new_node_to_old_nid;
   std::map<uint32_t, NodeEntry> old_eid_to_new_entry;
   std::map<std::pair<Node*, uint32_t>, uint32_t> new_entry_to_old_eid;
-  std::map<uint32_t, NodeEntry> copy_op_map;
+  std::map<uint32_t, NodeEntry> copy_entry_map;
+  std::map<uint32_t, bool> copy_node_preserve;
   size_t num_new_forward_inputs;
   size_t num_removed_forward_inputs;
   size_t num_new_forward_outputs;
@@ -179,8 +179,8 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
       CreateIdentity(sender_address + std::to_string(sender_old_nid) +
                      node_address + std::to_string(old_nid) +
                      std::to_string(i));
-    const auto& it = out->copy_op_map.find(in.idx.entry_id(input_ientry));
-    if (it != out->copy_op_map.end()) {
+    const auto& it = out->copy_entry_map.find(in.idx.entry_id(input_ientry));
+    if (it != out->copy_entry_map.end()) {
       // No need to do anything if the corresponding op is sender.
       if (SameNetAddress(node_address, in.localhost)) {
         new_node->inputs.push_back(it->second);
@@ -193,9 +193,13 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
       CHECK(in.idx[sender_old_nid].source->op() != in.net_init_op &&
             in.idx[sender_old_nid].source->op() != in.net_send_op &&
             in.idx[sender_old_nid].source->op() != in.net_recv_op);
+      std::cout << in.idx[old_nid].source->attrs.name << std::endl;
+      std::cout << "Shit!!!" << std::endl;
+      std::cout << in.idx[sender_old_nid].source->attrs.name << std::endl;
       CreateInputEntry(new_node,
                        out->old_nid_to_new_node.at(input_ientry.node_id),
                        true, input_ientry);
+      out->copy_node_preserve[input_ientry.node_id] = true;
     } else if (SameNetAddress(node_address, in.localhost)) {
       if (in.idx[old_nid].source->op() != in.net_recv_op) {
         // Inserts a net_recv_op node to replace the copy_op node.
@@ -210,14 +214,16 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
         // cause some problems.
         auto new_input_entry =
             CreateInputEntry(new_node, recv_node, false, input_ientry);
-        auto copy_node = out->old_nid_to_new_node.at(input_ientry.node_id);
-        out->new_node_to_old_nid.erase(copy_node.get());
-        out->old_nid_to_new_node[input_ientry.node_id] = recv_node;
-        out->new_node_to_old_nid[recv_node.get()] = input_ientry.node_id;
-        out->copy_op_map[in.idx.entry_id(input_ientry)] = new_input_entry;
+        //if (out->old_nid_to_new_node.count(input_ientry.node_id) >= 1) {
+          //auto copy_node = out->old_nid_to_new_node.at(input_ientry.node_id);
+          //out->new_node_to_old_nid.erase(copy_node.get());
+          //out->old_nid_to_new_node[input_ientry.node_id] = recv_node;
+          //out->new_node_to_old_nid[recv_node.get()] = input_ientry.node_id;
+        //}
+        out->copy_entry_map[in.idx.entry_id(input_ientry)] = new_input_entry;
       }
     } else if (SameNetAddress(sender_address, in.localhost)) {
-      CHECK(!SameNetAddress(input_address, in.localhost));
+      // CHECK(!SameNetAddress(input_address, in.localhost));
       NodePtr sender_node =
           out->old_nid_to_new_node.at(
               in.idx.node_id(input_node->inputs[0].node.get()));
@@ -231,11 +237,37 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
                           node_address, net_id, in.net_send_op);
       }
       const auto sender_entry = NodeEntry{sender_node, 0, 0};
-      out->copy_op_map[in.idx.entry_id(input_ientry)] = sender_entry;
-      //out->sender_nodes.push_back(sender_node);
+      //if (out->old_nid_to_new_node.count(input_ientry.node_id) >= 1) {
+        //auto copy_node = out->old_nid_to_new_node.at(input_ientry.node_id);
+        //out->new_node_to_old_nid.erase(copy_node.get());
+        //out->old_nid_to_new_node[input_ientry.node_id] = sender_node;
+        //out->new_node_to_old_nid[sender_node.get()] = input_ientry.node_id;
+      //}
+      out->copy_entry_map[in.idx.entry_id(input_ientry)] = sender_entry;
       out->senders_sink.node->control_deps.push_back(sender_node);
     } else {
+      //std::cout << "Sender : " << in.idx[sender_old_nid].source->attrs.name << std::endl;
+      //std::cout << "Copy : " << in.idx[input_ientry.node_id].source->attrs.name << std::endl;
+      //std::cout << (in.idx[input_ientry.node_id].source->attrs.op == in.copy_op) << std::endl;
+      //std::cout << input_address << std::endl;
+      //std::cout << in.localhost << std::endl;
+      //std::cout << "Receiver : " << in.idx[old_nid].source->attrs.name << std::endl;
+      //std::cout << new_node << std::endl;
       CHECK(!SameNetAddress(input_address, in.localhost));
+    }
+  }
+}
+
+static void RemoveUnusedCopyNode(const struct SplitGraphInputs& in,
+                                 struct SplitGraphOutputs* out) {
+  (void) in;
+  for (const auto kv : out->copy_node_preserve) {
+    if (!kv.second) {
+      auto copy_node = out->old_nid_to_new_node.at(kv.first);
+      out->new_node_to_old_nid.erase(copy_node.get());
+      out->old_nid_to_new_node.erase(kv.first);
+    } else {
+      std::cout << "NotRemoved" << std::endl;
     }
   }
 }
@@ -325,13 +357,13 @@ Graph SplitDistributedGraph(Graph src) {
   struct SplitGraphOutputs out = {
     Graph(),
     OutputIdxMap(),
-    std::vector<NodePtr>(),
     NodeEntry{senders_sink, 0, 0},
     std::map<uint32_t, NodePtr>(),
     std::map<Node*, uint32_t>(),
     std::map<uint32_t, NodeEntry>(),
     std::map<std::pair<Node*, uint32_t>, uint32_t>(),
     std::map<uint32_t, NodeEntry> (),
+    std::map<uint32_t, bool> (),
     0,
     0,
     0,
@@ -406,6 +438,9 @@ Graph SplitDistributedGraph(Graph src) {
       }
       out.old_nid_to_new_node[old_nid] = new_node;
       out.new_node_to_old_nid[new_node.get()] = old_nid;
+      if (new_node->attrs.op == in.copy_op) {
+        out.copy_node_preserve[old_nid] = false;
+      }
     }
     if (in.idx[old_nid].source->is_variable()) {
       num_input_encountered++;
@@ -430,10 +465,6 @@ Graph SplitDistributedGraph(Graph src) {
         out.ret.outputs.emplace_back(new_output_entry);
         out.output_idx_reverse_map[old_output_idx] = new_output_idx;
         new_output_idx++;
-        //for (auto& sender_node : out.sender_nodes) {
-          //new_node->control_deps.push_back(sender_node);
-          //out.sender_nodes.clear();
-        //}
       } else {
         if (old_output_idx + 1 <= in.num_forward_outputs) {
           out.num_removed_forward_outputs++;
@@ -458,6 +489,7 @@ Graph SplitDistributedGraph(Graph src) {
     }
   }
 
+  RemoveUnusedCopyNode(in, &out);
   UpdateGraphAttributes(in, &out);
   std::cout << "SplitDistributedGraph pass finished." << std::endl;
 
