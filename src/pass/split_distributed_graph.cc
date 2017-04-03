@@ -242,16 +242,16 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
         // cause some problems.
         auto new_input_entry =
             CreateInputEntry(new_node, recv_node, false, input_ientry);
-        //if (out->old_nid_to_new_node.count(input_ientry.node_id) >= 1) {
-          //auto copy_node = out->old_nid_to_new_node.at(input_ientry.node_id);
-          //out->new_node_to_old_nid.erase(copy_node.get());
-          //out->old_nid_to_new_node[input_ientry.node_id] = recv_node;
-          //out->new_node_to_old_nid[recv_node.get()] = input_ientry.node_id;
-        //}
+        if (out->old_nid_to_new_node.count(input_ientry.node_id) >= 1) {
+          auto copy_node = out->old_nid_to_new_node.at(input_ientry.node_id);
+          out->new_node_to_old_nid.erase(copy_node.get());
+        }
+        out->old_nid_to_new_node[input_ientry.node_id] = recv_node;
+        out->new_node_to_old_nid[recv_node.get()] = input_ientry.node_id;
         out->copy_entry_map[in.idx.entry_id(input_ientry)] = new_input_entry;
       }
     } else if (SameNetAddress(sender_address, in.localhost)) {
-      // CHECK(!SameNetAddress(input_address, in.localhost));
+      CHECK(!SameNetAddress(input_address, in.localhost));
       NodePtr sender_node =
           out->old_nid_to_new_node.at(
               in.idx.node_id(input_node->inputs[0].node.get()));
@@ -287,8 +287,6 @@ static void RemoveUnusedCopyNode(const struct SplitGraphInputs& in,
       auto copy_node = out->old_nid_to_new_node.at(kv.first);
       out->new_node_to_old_nid.erase(copy_node.get());
       out->old_nid_to_new_node.erase(kv.first);
-    } else {
-      std::cout << "NotRemoved" << std::endl;
     }
   }
 }
@@ -512,7 +510,7 @@ Graph SplitDistributedGraph(Graph src) {
     }
   }
 
-  RemoveUnusedCopyNode(in, &out);
+  //RemoveUnusedCopyNode(in, &out);
   UpdateGraphAttributes(in, &out);
   std::cout << "SplitDistributedGraph pass finished." << std::endl;
 
