@@ -129,12 +129,14 @@ static std::string CreateIdentity(const std::string& seed1,
                                   const std::string& seed4,
                                   const std::string& seed5) {
   static std::map<std::string, std::string[5]> id_map;
-  size_t id =
-    ((std::hash<std::string>{}(seed1) ^
-      std::hash<std::string>{}(seed2) ^
-      std::hash<std::string>{}(seed3) ^
-      std::hash<std::string>{}(seed4) ^
-      std::hash<std::string>{}(seed5)) << 1) % 100000000 + 90000000;
+  std::cout << seed3 << seed1 << seed5 << std::endl;
+  unsigned long id = std::stol(seed1 + seed3 + seed5) % 1000000000 + 1000000000;
+  //size_t id =
+    //((std::hash<std::string>{}(seed1) ^
+      //std::hash<std::string>{}(seed2) ^
+      //std::hash<std::string>{}(seed3) ^
+      //std::hash<std::string>{}(seed4) ^
+      //std::hash<std::string>{}(seed5)) << 1) % 100000000 + 90000000;
   std::string ret = std::to_string(id);
   if (id_map.count(ret) > 0) {
     std::cout << "Duplicated id : " << ret << std::endl
