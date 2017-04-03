@@ -224,9 +224,6 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
       CHECK(in.idx[sender_old_nid].source->op() != in.net_init_op &&
             in.idx[sender_old_nid].source->op() != in.net_send_op &&
             in.idx[sender_old_nid].source->op() != in.net_recv_op);
-      std::cout << in.idx[old_nid].source->attrs.name << std::endl;
-      std::cout << "Shit!!!" << std::endl;
-      std::cout << in.idx[sender_old_nid].source->attrs.name << std::endl;
       CreateInputEntry(new_node,
                        out->old_nid_to_new_node.at(input_ientry.node_id),
                        true, input_ientry);
@@ -277,13 +274,6 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
       out->copy_entry_map[in.idx.entry_id(input_ientry)] = sender_entry;
       out->senders_sink.node->control_deps.push_back(sender_node);
     } else {
-      //std::cout << "Sender : " << in.idx[sender_old_nid].source->attrs.name << std::endl;
-      //std::cout << "Copy : " << in.idx[input_ientry.node_id].source->attrs.name << std::endl;
-      //std::cout << (in.idx[input_ientry.node_id].source->attrs.op == in.copy_op) << std::endl;
-      //std::cout << input_address << std::endl;
-      //std::cout << in.localhost << std::endl;
-      //std::cout << "Receiver : " << in.idx[old_nid].source->attrs.name << std::endl;
-      //std::cout << new_node << std::endl;
       CHECK(!SameNetAddress(input_address, in.localhost));
     }
   }
