@@ -43,6 +43,7 @@ struct SplitGraphOutputs {
   size_t num_removed_forward_inputs;
   size_t num_new_forward_outputs;
   size_t num_removed_forward_outputs;
+  uint64_t tensor_id;
 };
 
 static bool SameNetAddress(const std::string& address1,
@@ -202,13 +203,14 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
     const auto& sender_inode = input_inode.inputs[0];
     const auto& sender_old_nid = sender_inode.node_id;
     const auto& sender_address = in.address_vec[sender_old_nid];
-    const std::string net_id =
+    out->tensor_id += 1;
+    //const std::string net_id =
       //CreateIdentity(std::to_string(sender_old_nid) + sender_address +
                      //std::to_string(i) +
                      //node_address + std::to_string(old_nid));
-      CreateIdentity(std::to_string(sender_old_nid), sender_address,
-                     std::to_string(i),
-                     node_address, std::to_string(old_nid));
+      //CreateIdentity(std::to_string(sender_old_nid), sender_address,
+                     //std::to_string(i),
+                     //node_address, std::to_string(old_nid));
 
     const auto& it = out->copy_entry_map.find(in.idx.entry_id(input_ientry));
     if (it != out->copy_entry_map.end()) {
@@ -232,7 +234,8 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
       if (in.idx[old_nid].source->op() != in.net_recv_op) {
         // Inserts a net_recv_op node to replace the copy_op node.
         auto recv_node =
-            CreateNetRecvNode(net_init_entry, sender_address, net_id,
+            CreateNetRecvNode(net_init_entry, sender_address, 
+                              std::to_string(out->tensor_id),
                               in.shape_vec[in.idx.entry_id(input_ientry)],
                               in.dtype_vec[in.idx.entry_id(input_ientry)],
                               in.net_recv_op);
@@ -262,7 +265,8 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
                           NodeEntry{out->old_nid_to_new_node.at(sender_old_nid),
                                     sender_inode.index,
                                     sender_inode.version},
-                          node_address, net_id, in.net_send_op);
+                          node_address, std::to_string(out->tensor_id), 
+                          in.net_send_op);
       }
       const auto sender_entry = NodeEntry{sender_node, 0, 0};
       //if (out->old_nid_to_new_node.count(input_ientry.node_id) >= 1) {
@@ -383,6 +387,7 @@ Graph SplitDistributedGraph(Graph src) {
     std::map<std::pair<Node*, uint32_t>, uint32_t>(),
     std::map<uint32_t, NodeEntry> (),
     std::map<uint32_t, bool> (),
+    0,
     0,
     0,
     0,
@@ -513,7 +518,7 @@ Graph SplitDistributedGraph(Graph src) {
   //RemoveUnusedCopyNode(in, &out);
   UpdateGraphAttributes(in, &out);
   std::cout << "SplitDistributedGraph pass finished." << std::endl;
-
+#if 0
   std::cout << "digraph {" << std::endl;
   const auto& retidx = out.ret.indexed_graph();
   for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
@@ -524,6 +529,7 @@ Graph SplitDistributedGraph(Graph src) {
     }
   }
   std::cout << "}" << std::endl;
+#endif
 
   return out.ret;
 }
