@@ -1426,17 +1426,23 @@ void GraphPartitioner::BroadcastEntries(
           (*dev_entries)[to] = (*dev_entries)[bcast.from];
         } else {
           CHECK(!visited[to]);
-          NodePtr copy_node = Node::Create();
-          copy_node->attrs.op = copy_op;
-          copy_node->attrs.name = "__broadcast_stage" + std::to_string(stageid);
-          copy_node->inputs.push_back((*dev_entries)[bcast.from]);
-          AssignDevice(copy_node, to);
-          FinalizeNodeCreation(copy_node);
-          // Shape.
-          CHECK(node_output_shapes_[copy_node].empty());
-          node_output_shapes_[copy_node].push_back(shape);
-          // Update the node entry of the target node.
-          (*dev_entries)[to] = NodeEntry{copy_node, 0, 0};
+          if (std::find(tgt_dev.begin(), tgt_dev.end(), to) != tgt_dev.end()) {
+            // The broadcast target is contained in the output targets.
+            (*dev_entries)[to] = (*dev_entries)[bcast.from];
+          } else {
+            CHECK(false) << "Multi-stage broadcasting is not allowed right now.";
+            NodePtr copy_node = Node::Create();
+            copy_node->attrs.op = copy_op;
+            copy_node->attrs.name = "__broadcast_stage" + std::to_string(stageid);
+            copy_node->inputs.push_back((*dev_entries)[bcast.from]);
+            AssignDevice(copy_node, to);
+            FinalizeNodeCreation(copy_node);
+            // Shape.
+            CHECK(node_output_shapes_[copy_node].empty());
+            node_output_shapes_[copy_node].push_back(shape);
+            // Update the node entry of the target node.
+            (*dev_entries)[to] = NodeEntry{copy_node, 0, 0};
+          }
           visited[to] = true;
         }
       }
@@ -1448,7 +1454,7 @@ void GraphPartitioner::BroadcastEntries(
     // one in and one output, the entry is directly assigned, leading to entry with different
     // device. Though this is still good since PlaceDevice pass will fix it. It is still
     // better to remove that case and put an explicit copy in it.
-    CHECK_ONDEVICE((*dev_entries)[tgt], tgt);
+    //CHECK_ONDEVICE((*dev_entries)[tgt], tgt);
   }
 }
 

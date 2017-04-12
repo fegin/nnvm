@@ -266,9 +266,10 @@ Graph PlaceDevice(Graph src) {
       ret.outputs.emplace_back(e);
     }
   }
-  DeviceVector new_device_vec(ret.indexed_graph().num_nodes());
-  for (uint32_t nid = 0; nid < ret.indexed_graph().num_nodes(); ++nid) {
-    auto source = ret.indexed_graph()[nid].source;
+  const auto& retidx = ret.indexed_graph();
+  DeviceVector new_device_vec(retidx.num_nodes());
+  for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
+    auto source = retidx[nid].source;
     if (new_device_map.count(source) == 0) {
       LOG(FATAL) << "canot find " << source;
     }
@@ -280,22 +281,44 @@ Graph PlaceDevice(Graph src) {
   if (src.attrs.count("dtype") != 0) {
     RemapEntryAttributes<int>(src, &ret, new_node_map, "dtype");
   }
-  for (size_t i = 0; i < ret.indexed_graph().num_nodes(); ++i) {
-    LOG(INFO) << "Node #" << i << " " << ret.indexed_graph()[i].source->attrs.name << " on " << new_device_vec[i];
-  }
-  ret.attrs["device"] = std::make_shared<any>(std::move(new_device_vec));
+  //for (size_t i = 0; i < ret.indexed_graph().num_nodes(); ++i) {
+    //LOG(INFO) << "Node #" << i << " " << ret.indexed_graph()[i].source->attrs.name << " on " << new_device_vec[i];
+  //}
 
+  // Generate dot graph.
   cout << "digraph {" << endl;
-  const auto& retidx = ret.indexed_graph();
+  vector<bool> touched_nodes(retidx.num_nodes(), false);
+  map<int, vector<uint32_t>> dev2nodes;
+  for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
+    dev2nodes[new_device_vec[nid]].push_back(nid);
+  }
   for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
     const auto& n = retidx[nid];
     for (const auto& in : n.inputs) {
-      cout << "\tn" << in.node_id << "_" << retidx[in.node_id].source->attrs.name
-           << " -> n" << nid << "_" << n.source->attrs.name << endl;
+      cout << "\tn" << in.node_id << " -> n" << nid << endl;
+      touched_nodes[nid] = true;
+      touched_nodes[in.node_id] = true;
     }
+  }
+  for (const auto& kv : dev2nodes ) {
+    const int dev = kv.first;
+    const auto& nodes = kv.second;
+    cout << "\tsubgraph cluster" << dev << " {" << endl;
+    cout << "\t\tlabel=\"device #" << dev << "\"" << endl;
+    for (uint32_t nid : nodes) {
+      if (!touched_nodes[nid]) {
+        continue;
+      }
+      cout << "\t\tn" << nid << " [label=\""
+        << "n" << nid << "_" << retidx[nid].source->attrs.name << "\"]" << endl;
+    }
+      //cout << "\tn" << in.node_id << "_" << retidx[in.node_id].source->attrs.name
+           //<< " -> n" << nid << "_" << n.source->attrs.name << endl;
+    cout << "\t}" << endl;
   }
   cout << "}" << endl;
 
+  ret.attrs["device"] = std::make_shared<any>(std::move(new_device_vec));
   return ret;
 }
 

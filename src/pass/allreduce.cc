@@ -9,6 +9,9 @@ namespace {
 
 void LogBroadcast(const vector<int>& source, const vector<int>& target,
       const vector<CommPlanner::BroadcastStage>& stages, ostream& oss) {
+  if (stages.empty()) {
+    return;
+  }
   oss << "Broadcast: [";
   for (const int src : source) {
     oss << src << " ";
@@ -36,6 +39,9 @@ void LogBroadcast(const vector<int>& source, const vector<int>& target,
 
 void LogReduce(const vector<int>& source, int target,
       const vector<CommPlanner::ReduceStage>& stages, ostream& oss) {
+  if (stages.empty()) {
+    return;
+  }
   oss << "Reduce: [";
   for (const int src : source) {
     oss << src << " ";
@@ -292,17 +298,22 @@ class AllToAllCommPlanner : public CommPlanner {
       }
     }
     // Make plan.
-    vector<BroadcastStage> plan(1);
+    vector<BroadcastStage> plan;
+    BroadcastStage stage;
     for (const int src : source) {
       vector<int> push_to;
       for (size_t i = 0; i < target.size(); ++i) {
-        if (fetch_from[i] == src) {
+        if (fetch_from[i] == src && target[i] != src) { // local fetch would not be generated.
           push_to.push_back(target[i]);
         }
       }
       if (!push_to.empty()) {
-        plan[0].broadcasts.emplace_back(src, std::move(push_to));
+        stage.broadcasts.emplace_back(src, std::move(push_to));
       }
+    }
+
+    if (!stage.broadcasts.empty()) {
+      plan.emplace_back(std::move(stage));
     }
 
     LogBroadcast(source, target, plan, comm_plan_logs_);
