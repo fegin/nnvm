@@ -252,6 +252,36 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
         out->old_nid_to_new_node[input_ientry.node_id] = recv_node;
         out->new_node_to_old_nid[recv_node.get()] = input_ientry.node_id;
         out->copy_entry_map[in.idx.entry_id(input_ientry)] = new_input_entry;
+
+#if 1
+        {
+          std::vector<nnvm::NodeEntry> recv = {input_node->inputs[0]};
+          NodePtr copy = nullptr;
+	  DFSVisit(recv, [&copy, &in, &out, &recv_node] (const nnvm::NodePtr& n) {
+             if (n->attrs.op == in.copy_op) {
+               const auto& address = in.address_vec.at(in.idx.node_id(n->inputs[0].node.get()));
+               if (address == in.localhost) {
+               	 copy = n;
+#if 0
+            	 auto copy_entry = NodeEntry{copy, 0, 0};
+            	 recv_node->control_deps.push_back(
+        		out->copy_entry_map.at(in.idx.entry_id(copy_entry)).node);
+#endif
+	       }
+             }
+	  });
+#if 1
+          if (copy != nullptr) {
+            auto copy_entry = NodeEntry{copy, 0, 0};
+            recv_node->control_deps.push_back(
+        	out->copy_entry_map.at(in.idx.entry_id(copy_entry)).node);
+            std::cout << recv_node->attrs.name << " depends on " 
+		      << out->copy_entry_map.at(in.idx.entry_id(copy_entry)).node->attrs.name
+                       << std::endl;
+          }
+#endif
+        }
+#endif
       }
     } else if (SameNetAddress(sender_address, in.localhost)) {
       CHECK(!SameNetAddress(input_address, in.localhost));
