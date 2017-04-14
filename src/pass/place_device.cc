@@ -312,8 +312,6 @@ Graph PlaceDevice(Graph src) {
       cout << "\t\tn" << nid << " [label=\""
         << "n" << nid << "_" << retidx[nid].source->attrs.name << "\"]" << endl;
     }
-      //cout << "\tn" << in.node_id << "_" << retidx[in.node_id].source->attrs.name
-           //<< " -> n" << nid << "_" << n.source->attrs.name << endl;
     cout << "\t}" << endl;
   }
   cout << "}" << endl;
