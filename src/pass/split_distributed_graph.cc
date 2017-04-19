@@ -417,29 +417,35 @@ static void AddSendDepencies(const struct SplitGraphInputs& in,
   });
 
   for (const auto& entry : send_parent_list) {
-    NodePtr nearest_node;
-    DFSVisit({entry}, [&nearest_node] (const nnvm::NodePtr& n) {
-      if (IsComputeNode(n)) {
+    NodePtr nearest_node = nullptr;
+    const auto& self = entry.node;
+    DFSVisit({entry}, [&self, &nearest_node] (const nnvm::NodePtr& n) {
+      if (IsComputeNode(n) && self.get() != n.get()) {
         nearest_node = n;
       }
     });
-    compute_node_mapping[nearest_node].push_back(entry);
+    if (nearest_node != nullptr) {
+      compute_node_mapping[nearest_node].push_back(entry);
+    }
   }
   for (const auto& entry : compute_list) {
-    NodePtr nearest_node;
+    NodePtr nearest_node = nullptr;
     DFSVisit({entry}, [&nearest_node] (const nnvm::NodePtr& n) {
       if (IsComputeNode(n)) {
         nearest_node = n;
       }
     });
+    if (nearest_node == nullptr) {
+      continue;
+    }
     const auto it = compute_node_mapping.find(nearest_node);
     if (it != compute_node_mapping.end()) {
       for (const auto& send_parent_entry : it->second) {
         // Check for deadlock.
         bool deadlock = false;
-        DFSVisit({entry}, 
-                 [&send_parent_entry, &deadlock] (const nnvm::NodePtr& n) {
-          if (send_parent_entry.node.get() == n.get()) {
+        DFSVisit({send_parent_entry}, 
+                 [&entry, &deadlock] (const nnvm::NodePtr& n) {
+          if (entry.node.get() == n.get()) {
             deadlock = true;
           }
         });
