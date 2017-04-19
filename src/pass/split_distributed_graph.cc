@@ -387,13 +387,20 @@ static void UpdateGraphAttributes(const struct SplitGraphInputs& in,
 
 static bool IsComputeNode (const NodePtr node) {
   if (!node->is_variable()) {
+    std::cout << "Op Name : " << node->op()->name << std::endl;
     if (node->op()->name == "Activation" ||
         node->op()->name == "Pooling" ||
         node->op()->name == "Convolution" ||
         node->op()->name == "FullyConnected" ||
+        node->op()->name == "Flatten" ||
+        node->op()->name == "SoftmaxOutput" ||
+        node->op()->name == "_backward_Activation" ||
         node->op()->name == "_backward_Pooling" ||
         node->op()->name == "_backward_Convolution" ||
-        node->op()->name == "_backward_FullyConnected") {
+        node->op()->name == "_backward_FullyConnected" ||
+        node->op()->name == "_backward_copy" ||
+        node->op()->name == "_backward_SoftmaxOutput"
+        ) {
       return true;
     } 
   }
