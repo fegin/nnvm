@@ -1788,6 +1788,9 @@ Graph GraphPartitioner::Run() {
       n->attrs.name = node->attrs.name + "_" + std::to_string(i);
       // Control dependencies.
       for (const NodeEntry& in_ent : node->inputs) {
+        if (in_ent.node->is_variable()) {
+           continue;
+        }
         const uint32_t in_node_id = graph.node_id(in_ent.node.get());
         CHECK(splitted_nodes[in_node_id].size() > 0);
         n->control_deps.push_back(splitted_nodes[in_node_id][i]);
