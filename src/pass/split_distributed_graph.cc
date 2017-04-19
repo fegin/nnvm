@@ -621,15 +621,39 @@ Graph SplitDistributedGraph(Graph src) {
 #endif
 
   std::cout << "SplitDistributedGraph pass finished." << std::endl;
+  const auto& retidx = out.ret.indexed_graph();
 #if 1
   std::cout << "digraph {" << std::endl;
-  const auto& retidx = out.ret.indexed_graph();
+  std::vector<bool> touched_nodes(retidx.num_nodes(), false);
   for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
     const auto& n = retidx[nid];
-    for (const auto& in : n.inputs) {
-      std::cout << "\tn" << in.node_id << "_" << retidx[in.node_id].source->attrs.name
-        << " -> n" << nid << "_" << n.source->attrs.name << std::endl;
+    if (n.source->attrs.name == "SendersSink") {
+      continue;
     }
+    for (const auto& in : n.inputs) {
+      if (n.source->attrs.name == "NetInit" || retidx[in.node_id].source->attrs.name == "NetInit") {
+        continue;
+      }
+      std::cout << "\tn" << in.node_id << " -> n" << nid << std::endl;
+      touched_nodes[nid] = true;
+      touched_nodes[in.node_id] = true;
+    }
+    for (uint32_t control_nid : n.control_deps) {
+      if (n.source->attrs.name == "NetInit" || retidx[control_nid].source->attrs.name == "NetInit") {
+        continue;
+      }
+      std::cout << "\tn" << control_nid << " -> n" << nid
+        << " [style=dotted]" << std::endl;
+      touched_nodes[control_nid] = true;
+      touched_nodes[nid] = true;
+    }
+  }
+  for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
+    if (!touched_nodes[nid]) {
+      continue;
+    }
+    std::cout << "\t\tn" << nid << " [label=\""
+      << "n" << nid << "_" << retidx[nid].source->attrs.name << "\"]" << std::endl;
   }
   std::cout << "}" << std::endl;
 #endif
