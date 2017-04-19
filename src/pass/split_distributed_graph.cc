@@ -448,6 +448,7 @@ static void AddSendDepencies(const struct SplitGraphInputs& in,
     }
     std::cout << entry.node->attrs.name << " nearest_node : " << nearest_node->attrs.name << std::endl;
     const auto it = compute_node_mapping.find(nearest_node);
+    size_t original_control_size = entry.node->control_deps.size();
     if (it != compute_node_mapping.end()) {
       for (const auto& send_parent_entry : it->second) {
         // Check for deadlock.
@@ -463,6 +464,9 @@ static void AddSendDepencies(const struct SplitGraphInputs& in,
                     << entry.node->attrs.name << " depends on " 
                     << send_parent_entry.node->attrs.name << std::endl;
           entry.node->control_deps.push_back(send_parent_entry.node);
+          if (original_control_size == 0) {
+            entry.node->attrs.dict["OriginalControlSize"] = "0";
+          }
         }
       }
     }
