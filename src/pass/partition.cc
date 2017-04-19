@@ -1787,7 +1787,12 @@ Graph GraphPartitioner::Run() {
       n->attrs = attrs;
       n->attrs.name = node->attrs.name + "_" + std::to_string(i);
       // Control dependencies.
-      // TODO(minjie): Control dependencies are ignored.
+      for (const NodeEntry& in_ent : node->inputs) {
+        const uint32_t in_node_id = graph.node_id(in_ent.node.get());
+        CHECK(splitted_nodes[in_node_id].size() > 0);
+        n->control_deps.push_back(splitted_nodes[in_node_id][i]);
+      }
+      // TODO(minjie): Original control dependencies are ignored.
       /*
       for (NodePtr depend_node : node->control_deps) {
         const uint32_t depend_nid = graph.node_id(depend_node.get());
