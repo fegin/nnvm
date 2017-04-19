@@ -388,18 +388,25 @@ static void UpdateGraphAttributes(const struct SplitGraphInputs& in,
 static bool IsComputeNode (const NodePtr node) {
   if (!node->is_variable()) {
     std::cout << "Op Name : " << node->op()->name << std::endl;
-    if (node->op()->name == "Activation" ||
-        node->op()->name == "Pooling" ||
-        node->op()->name == "Convolution" ||
+    //if (node->op()->name == "Activation" ||
+        //node->op()->name == "Pooling" ||
+        //node->op()->name == "Convolution" ||
+        //node->op()->name == "FullyConnected" ||
+        //node->op()->name == "Flatten" ||
+        //node->op()->name == "SoftmaxOutput" ||
+        //node->op()->name == "_backward_Activation" ||
+        //node->op()->name == "_backward_Pooling" ||
+        //node->op()->name == "_backward_Convolution" ||
+        //node->op()->name == "_backward_FullyConnected" ||
+        //node->op()->name == "_backward_copy" ||
+        //node->op()->name == "_backward_SoftmaxOutput"
+        //) {
+      //return true;
+    //} 
+    if (node->op()->name == "Convolution" ||
         node->op()->name == "FullyConnected" ||
-        node->op()->name == "Flatten" ||
-        node->op()->name == "SoftmaxOutput" ||
-        node->op()->name == "_backward_Activation" ||
-        node->op()->name == "_backward_Pooling" ||
         node->op()->name == "_backward_Convolution" ||
-        node->op()->name == "_backward_FullyConnected" ||
-        node->op()->name == "_backward_copy" ||
-        node->op()->name == "_backward_SoftmaxOutput"
+        node->op()->name == "_backward_FullyConnected" 
         ) {
       return true;
     } 
@@ -410,20 +417,29 @@ static bool IsComputeNode (const NodePtr node) {
 static void AddSendDepencies(const struct SplitGraphInputs& in,
                              struct SplitGraphOutputs* out) {
   std::vector<NodeEntry> compute_list;
+  std::vector<NodeEntry> copy_list;
   std::vector<NodeEntry> send_parent_list;
-  std::map<NodePtr, std::vector<NodeEntry>> compute_node_mapping;
-  DFSVisit(out->ret.outputs, 
-           [&in, &compute_list, &send_parent_list] (const nnvm::NodePtr& n) {
-     if (IsComputeNode(n)) {
-       NodeEntry e = {n, 0, 0};
-       compute_list.push_back(e);
-     }
-     if (n->attrs.op == in.net_send_op) {
-       send_parent_list.push_back(n->inputs[0]);
-     }
+  //std::map<NodePtr, std::vector<NodeEntry>> compute_node_mapping;
+  std::map<std::string, std::vector<NodeEntry>> compute_node_mapping;
+  DFSVisit(in.src.outputs, 
+           [&in, &out, &compute_list, &copy_list] (const nnvm::NodePtr& n) {
+    if (n->attrs.name.find("NetInit") != std::string::npos) {
+      return;
+    }
+    NodeEntry e = {n, 0, 0};
+    unsigned node_id = in.idx.node_id(n.get());
+    unsigned entry_id = in.idx.entry_id(e);
+    if (IsComputeNode(n) && in.address_vec[node_id] == in.localhost) { 
+      compute_list.push_back(e);
+    }
+    if (n->attrs.op == in.copy_op &&
+        out->copy_entry_map.count(entry_id) > 0 &&
+        out->copy_entry_map[entry_id].node->attrs.op == in.net_send_op) {
+      copy_list.push_back(e);
+    }
   });
 
-  for (const auto& entry : send_parent_list) {
+  for (const auto& entry : copy_list) {
     NodePtr nearest_node = nullptr;
     const auto& self = entry.node;
     DFSVisit({entry}, [&self, &nearest_node] (const nnvm::NodePtr& n) {
@@ -432,7 +448,12 @@ static void AddSendDepencies(const struct SplitGraphInputs& in,
       }
     });
     if (nearest_node != nullptr) {
-      compute_node_mapping[nearest_node].push_back(entry);
+      std::string name = nearest_node->attrs.name;
+      auto index = name.rfind("_");
+      CHECK(index != name.npos);
+      name = name.substr(0, index);
+      compute_node_mapping[name].push_back(entry);
+      std::cout << "Found a name : " << name << std::endl;
     }
   }
   for (const auto& entry : compute_list) {
@@ -446,28 +467,37 @@ static void AddSendDepencies(const struct SplitGraphInputs& in,
     if (nearest_node == nullptr) {
       continue;
     }
+    std::string name = nearest_node->attrs.name;
+    auto index = name.rfind("_");
+    CHECK(index != name.npos);
+    name = name.substr(0, index);
+    std::cout << "Found a name : " << name << std::endl;
+
     std::cout << entry.node->attrs.name << " nearest_node : " << nearest_node->attrs.name << std::endl;
-    const auto it = compute_node_mapping.find(nearest_node);
+    const auto it = compute_node_mapping.find(name);
     std::set<Node*> control;
     size_t original_control_size = entry.node->control_deps.size();
+    NodePtr curr_node = out->old_nid_to_new_node.at(in.idx.node_id(entry.node.get()));
     if (it != compute_node_mapping.end()) {
-      for (const auto& send_parent_entry : it->second) {
+      for (const auto& copy_entry : it->second) {
+        NodeEntry send_entry = out->copy_entry_map.at(in.idx.entry_id(copy_entry));
         // Check for deadlock.
         bool deadlock = false;
-        DFSVisit({send_parent_entry}, 
-                 [&entry, &deadlock] (const nnvm::NodePtr& n) {
-          if (entry.node.get() == n.get()) {
+        DFSVisit({send_entry}, 
+                 [&curr_node, &deadlock] (const nnvm::NodePtr& n) {
+          if (curr_node.get() == n.get()) {
             deadlock = true;
           }
         });
-        if (!deadlock && control.count(send_parent_entry.node.get()) == 0) {
+        NodePtr send_parent = send_entry.node->inputs[0].node;
+        if (!deadlock && control.count(send_parent.get()) == 0) {
           std::cout << "SendDependencies : " 
-                    << entry.node->attrs.name << " depends on " 
-                    << send_parent_entry.node->attrs.name << " "
-                    << send_parent_entry.node.get()
+                    << curr_node->attrs.name << "(" << name << ")"
+                    << " depends on " 
+                    << send_parent->attrs.name 
                     << std::endl;
-          entry.node->control_deps.push_back(send_parent_entry.node);
-          control.insert(send_parent_entry.node.get());
+          entry.node->control_deps.push_back(send_parent);
+          control.insert(send_parent.get());
           if (original_control_size == 0) {
             entry.node->attrs.dict["OriginalControlSize"] = "0";
           }
