@@ -253,7 +253,7 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
         out->new_node_to_old_nid[recv_node.get()] = input_ientry.node_id;
         out->copy_entry_map[in.idx.entry_id(input_ientry)] = new_input_entry;
 
-#if 1
+#if 0
         {
           std::vector<nnvm::NodeEntry> recv = {input_node->inputs[0]};
           NodePtr copy = nullptr;
@@ -383,6 +383,75 @@ static void UpdateGraphAttributes(const struct SplitGraphInputs& in,
             //<< in.num_forward_outputs << " "
             //<< out->num_new_forward_outputs << " "
             //<< out->num_removed_forward_outputs << " "  << std::endl;
+}
+
+static bool IsComputeNode (const NodePtr node) {
+  if (!node->is_variable()) {
+    if (node->op()->name == "Activation" ||
+        node->op()->name == "Pooling" ||
+        node->op()->name == "Convolution" ||
+        node->op()->name == "FullyConnected" ||
+        node->op()->name == "_backward_Pooling" ||
+        node->op()->name == "_backward_Convolution" ||
+        node->op()->name == "_backward_FullyConnected") {
+      return true;
+    } 
+  }
+  return false;
+}
+
+static void AddSendDepencies(const struct SplitGraphInputs& in,
+                             struct SplitGraphOutputs* out) {
+  std::vector<NodeEntry> compute_list;
+  std::vector<NodeEntry> send_parent_list;
+  std::map<NodePtr, std::vector<NodeEntry>> compute_node_mapping;
+  DFSVisit(out->ret.outputs, 
+           [&in, &compute_list, &send_parent_list] (const nnvm::NodePtr& n) {
+     if (IsComputeNode(n)) {
+       NodeEntry e = {n, 0, 0};
+       compute_list.push_back(e);
+     }
+     if (n->attrs.op == in.net_send_op) {
+       send_parent_list.push_back(n->inputs[0]);
+     }
+  });
+
+  for (const auto& entry : send_parent_list) {
+    NodePtr nearest_node;
+    DFSVisit({entry}, [&nearest_node] (const nnvm::NodePtr& n) {
+      if (IsComputeNode(n)) {
+        nearest_node = n;
+      }
+    });
+    compute_node_mapping[nearest_node].push_back(entry);
+  }
+  for (const auto& entry : compute_list) {
+    NodePtr nearest_node;
+    DFSVisit({entry}, [&nearest_node] (const nnvm::NodePtr& n) {
+      if (IsComputeNode(n)) {
+        nearest_node = n;
+      }
+    });
+    const auto it = compute_node_mapping.find(nearest_node);
+    if (it != compute_node_mapping.end()) {
+      for (const auto& send_parent_entry : it->second) {
+        // Check for deadlock.
+        bool deadlock = false;
+        DFSVisit({entry}, 
+                 [&send_parent_entry, &deadlock] (const nnvm::NodePtr& n) {
+          if (send_parent_entry.node.get() == n.get()) {
+            deadlock = true;
+          }
+        });
+        if (!deadlock) {
+          std::cout << "SendDependencies : " 
+                    << entry.node->attrs.name << " depends on " 
+                    << send_parent_entry.node->attrs.name << std::endl;
+          entry.node->control_deps.push_back(send_parent_entry.node);
+        }
+      }
+    }
+  }
 }
 
 Graph SplitDistributedGraph(Graph src) {
@@ -547,8 +616,12 @@ Graph SplitDistributedGraph(Graph src) {
 
   //RemoveUnusedCopyNode(in, &out);
   UpdateGraphAttributes(in, &out);
+#if 1
+  AddSendDepencies(in, &out);
+#endif
+
   std::cout << "SplitDistributedGraph pass finished." << std::endl;
-#if 0
+#if 1
   std::cout << "digraph {" << std::endl;
   const auto& retidx = out.ret.indexed_graph();
   for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
