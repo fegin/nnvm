@@ -253,7 +253,7 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
         out->new_node_to_old_nid[recv_node.get()] = input_ientry.node_id;
         out->copy_entry_map[in.idx.entry_id(input_ientry)] = new_input_entry;
 
-#if 0
+#if 1
         {
           std::vector<nnvm::NodeEntry> recv = {input_node->inputs[0]};
           NodePtr copy = nullptr;
@@ -441,6 +441,7 @@ static void AddSendDepencies(const struct SplitGraphInputs& in,
     }
     std::cout << entry.node->attrs.name << " nearest_node : " << nearest_node->attrs.name << std::endl;
     const auto it = compute_node_mapping.find(nearest_node);
+    std::set<Node*> control;
     if (it != compute_node_mapping.end()) {
       for (const auto& send_parent_entry : it->second) {
         // Check for deadlock.
@@ -451,11 +452,14 @@ static void AddSendDepencies(const struct SplitGraphInputs& in,
             deadlock = true;
           }
         });
-        if (!deadlock) {
+        if (!deadlock && control.count(send_parent_entry.node.get()) == 0) {
           std::cout << "SendDependencies : " 
                     << entry.node->attrs.name << " depends on " 
-                    << send_parent_entry.node->attrs.name << std::endl;
+                    << send_parent_entry.node->attrs.name << " "
+                    << send_parent_entry.node.get()
+                    << std::endl;
           entry.node->control_deps.push_back(send_parent_entry.node);
+          control.insert(send_parent_entry.node.get());
         }
       }
     }
