@@ -430,14 +430,16 @@ static void AddSendDepencies(const struct SplitGraphInputs& in,
   }
   for (const auto& entry : compute_list) {
     NodePtr nearest_node = nullptr;
-    DFSVisit({entry}, [&nearest_node] (const nnvm::NodePtr& n) {
-      if (IsComputeNode(n)) {
+    const auto& self = entry.node;
+    DFSVisit({entry}, [&self, &nearest_node] (const nnvm::NodePtr& n) {
+      if (IsComputeNode(n) && self.get() != n.get()) {
         nearest_node = n;
       }
     });
     if (nearest_node == nullptr) {
       continue;
     }
+    std::cout << entry.node->attrs.name << " nearest_node : " << nearest_node->attrs.name << std::endl;
     const auto it = compute_node_mapping.find(nearest_node);
     if (it != compute_node_mapping.end()) {
       for (const auto& send_parent_entry : it->second) {
