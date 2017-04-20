@@ -64,9 +64,13 @@ Graph PartitionPass(Graph src) {
     << "Require number of devices for partitioning";
   const unordered_map<uint32_t, uint32_t>& backward2forward =
     src.GetAttr<unordered_map<uint32_t, uint32_t>>("backward2forward");
+  const string& tiling_type = dmlc::GetEnv("TOFU_TILING_TYPE", string("kcuts"));
+  const int oversharding = dmlc::GetEnv("TOFU_OVERSHARDING", 0);
   const int num_devices = src.GetAttr<int>("num_devices");
   const int num_cuts = GetNumCuts(num_devices);
   const string& default_group = src.GetAttr<string>("default_group");
+    
+  LOG(INFO) << "Oversharding status=" << oversharding;
   LOG(INFO) << "Number of cuts: " << num_cuts;
 
   const IndexedGraph& graph = src.indexed_graph();
@@ -93,17 +97,21 @@ Graph PartitionPass(Graph src) {
   nnlvls.Run();
   nnlvls.Print();
 
-  string tiling_type = dmlc::GetEnv("TOFU_TILING_TYPE", string("kcuts"));
   Tiling* tiling = nullptr;
-
   if (tiling_type == "kcuts") {
-    
     // Cut algorithm.
     CutAlgorithm* algo = new CutAlgorithm(&src, nnlvls, groups);
-    cost_t total_cost = algo->KCuts(num_cuts);
+    cost_t total_cost = 0;
+    total_cost = algo->KCuts(num_cuts);
     algo->Print();
     LOG(INFO) << "Total K-cuts cost: " << total_cost;
-    tiling = algo;
+    if (oversharding) {
+      LOG(INFO) << "Oversharding enabled";
+      Tiling* overshard_tiling = new DataParallelism(&src, groups, 2);
+      tiling = new MergeTiling(&src, algo, overshard_tiling);
+    } else {
+      tiling = algo;
+    }
   } else if (tiling_type == "datapar") {
     // Data parallelism
     tiling = new DataParallelism(&src, groups, num_devices);
@@ -114,13 +122,14 @@ Graph PartitionPass(Graph src) {
 
   // Graph partitioner.
   CHECK_NOTNULL(tiling);
+  const int num_partitions = oversharding? num_devices * 2 : num_devices;
   GraphPartitioner pttn(
       *tiling, &src,
       CommPlanner::kDefaultPlanner,
-      num_devices,
-      default_group);
+      num_partitions);
+  pttn.SetOversharding(oversharding);
+  pttn.SetDefaultGraph(default_group);
 
-  //return src;
   const Graph& ret = pttn.Run();
 
   delete tiling;

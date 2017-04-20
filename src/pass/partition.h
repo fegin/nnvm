@@ -239,6 +239,49 @@ class Tiling {
   virtual const std::vector<size_t>& GetChosenSchemeRequests(uint32_t node_id) const = 0;
 };
 
+class MergeTiling : public Tiling {
+ public:
+  MergeTiling(Graph* src, Tiling* t1, Tiling* t2): t1_(t1), t2_(t2) {
+    const IndexedGraph& idxgraph = src->indexed_graph();
+    entry_schemes_.resize(idxgraph.num_node_entries());
+    scheme_requests_.resize(idxgraph.num_nodes());
+    chosen_scheme_requests_.resize(idxgraph.num_nodes());
+    for (uint32_t entry_id = 0; entry_id < idxgraph.num_node_entries(); ++entry_id) {
+      entry_schemes_[entry_id] = t1->GetEntrySchemes(entry_id);
+      const auto& from_t2 = t2->GetEntrySchemes(entry_id);
+      entry_schemes_[entry_id].insert(
+          entry_schemes_[entry_id].end(), from_t2.begin(), from_t2.end());
+    }
+    for (uint32_t node_id = 0; node_id < idxgraph.num_nodes(); ++node_id) {
+      {
+      scheme_requests_[node_id] = t1->GetSchemeRequests(node_id);
+      const auto& from_t2 = t2->GetSchemeRequests(node_id);
+      scheme_requests_[node_id].insert(
+          scheme_requests_[node_id].end(), from_t2.begin(), from_t2.end());
+      }
+      {
+      chosen_scheme_requests_[node_id] = t1->GetChosenSchemeRequests(node_id);
+      const auto& from_t2 = t2->GetChosenSchemeRequests(node_id);
+      chosen_scheme_requests_[node_id].insert(
+          chosen_scheme_requests_[node_id].end(), from_t2.begin(), from_t2.end());
+      }
+    }
+  }
+  const std::vector<Scheme>& GetEntrySchemes(uint32_t entry_id) const;
+  const std::vector<SchemeRequest>& GetSchemeRequests(uint32_t node_id) const {
+    return scheme_requests_.at(node_id);
+  }
+  const std::vector<size_t>& GetChosenSchemeRequests(uint32_t node_id) const {
+    return chosen_scheme_requests_.at(node_id);
+  }
+ private:
+  Tiling *t1_, *t2_;
+
+  std::vector<std::vector<Scheme>> entry_schemes_;
+  std::vector<std::vector<SchemeRequest>> scheme_requests_;
+  std::vector<std::vector<size_t>> chosen_scheme_requests_;
+};
+
 class ManualTiling : public Tiling {
  public:
   ManualTiling(Graph* src, const NodeEntryGroups& groups, size_t num_devices);
@@ -405,16 +448,26 @@ class Grid {
 class GraphPartitioner {
  public:
   GraphPartitioner(const Tiling& tiling, Graph* src,
-      const std::string& comm_name, size_t num_devices,
-      const std::string& default_group):
-    tiling_(tiling), src_graph_(src), num_devices_(num_devices),
-    default_group_(default_group) {
+      const std::string& comm_name, size_t num_devices):
+    tiling_(tiling), src_graph_(src), num_devices_(num_devices) {
     comm_planner_ = CommPlanner::CreatePlanner(comm_name);
+  }
+
+  void SetOversharding(bool flag) {
+    oversharding_ = flag;
+  }
+
+  void SetDefaultGraph(const std::string& group) {
+    default_group_ = group;
   }
 
   Graph Run();
 
  private:
+  void AssignDevice(NodePtr node, size_t device_group_id);
+
+  void AssignDefaultGroup(NodePtr node);
+
   std::vector<NodeEntry> SplitEntry(const NodeEntry& from, const TShape& ret_shape,
                                     const std::string& name, size_t num_args, size_t dim,
                                     size_t device_group_id);
@@ -453,7 +506,9 @@ class GraphPartitioner {
   Graph* src_graph_;
   std::unique_ptr<CommPlanner> comm_planner_;
   const size_t num_devices_;
-  const std::string default_group_;
+
+  bool oversharding_{false};
+  std::string default_group_;
 
   std::unordered_map<NodePtr, std::vector<TShape>> node_output_shapes_;
 };

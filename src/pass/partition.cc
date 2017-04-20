@@ -248,14 +248,6 @@ inline void FinalizeNodeCreation(NodePtr node) {
   }
 }
 
-inline void AssignDevice(NodePtr node, size_t device_group_id) {
-  node->attrs.dict["__ctx_group__"] = "group:" + std::to_string(device_group_id);
-}
-
-inline void AssignDevice(NodePtr node, const string& group) {
-  node->attrs.dict["__ctx_group__"] = group;
-}
-
 #define CHECK_ONDEVICE(ent, dev) \
   CHECK_EQ((ent).node->attrs.dict["__ctx_group__"], "group:" + std::to_string((dev))) \
   << (ent).node->attrs.dict["__ctx_group__:"] << " v.s. " << (dev)
@@ -748,6 +740,17 @@ void ManualTiling::ChooseSchemeRequests() {
     total_cost += best_cost;
   }
   LOG(INFO) << "Estimated communication cost (2 nodes): " << total_cost;
+}
+  
+const std::vector<Scheme>& MergeTiling::GetEntrySchemes(uint32_t entry_id) const {
+  ostringstream oss;
+  oss << "[";
+  for (const auto& x : entry_schemes_.at(entry_id)) {
+    oss << x << " ";
+  }
+  oss << "]";
+  LOG(INFO) << "Entry#" << entry_id << ": " << oss.str();
+  return entry_schemes_.at(entry_id);
 }
 
 DataParallelism::DataParallelism(Graph* src, const NodeEntryGroups& groups, size_t num_devices):
@@ -1342,6 +1345,17 @@ pair<Scheme, size_t> Grid::PopScheme(Grid::ConcatFn concatfn) {
   return last;
 }
 
+void GraphPartitioner::AssignDevice(NodePtr node, size_t device_group_id) {
+  if (oversharding_) {
+    device_group_id /= 2;
+  }
+  node->attrs.dict["__ctx_group__"] = "group:" + std::to_string(device_group_id);
+}
+
+void GraphPartitioner::AssignDefaultGroup(NodePtr node) {
+  node->attrs.dict["__ctx_group__"] = default_group_;
+}
+
 vector<NodeEntry> GraphPartitioner::SplitEntry(
     const NodeEntry& from, const TShape& ret_shape,
     const std::string& name,
@@ -1463,6 +1477,7 @@ void GraphPartitioner::AllReduceBlocks(
     const TShape& shape) {
   CHECK_GT(inputs.size(), 1);
   const Op* sum_op = Op::Get("ElementWiseSum");
+
   // Split for balanced allreduce.
   vector<vector<NodeEntry>> splitted(inputs.size());
   // TODO(minjie): The split here should be a FlattenAndSplit because we
@@ -1725,8 +1740,16 @@ Graph GraphPartitioner::Run() {
       // here to simulate the computation while ignore the copy time from CPU to each card.
       CHECK(node_output_shapes_[node].empty());
       node_output_shapes_[node].push_back(shapes[out_ent_id]);
+      AssignDefaultGroup(node);  // The original node is assigned to the default group.
       // TODO: version ?
       for (size_t i = 0; i < entry_grids[out_ent_id].TotalNumBlocks(); ++i) {
+        if (oversharding_ && i % 2 == 1) {
+          // TODO(minjie): Currently all oversharded blocks will share the same variable node.
+          // However, a correct way is to share only "replicated" nodes. For row/col partitioend
+          // nodes, they should be separate.
+          entry_grids[out_ent_id].BlockAt(i).entry = entry_grids[out_ent_id].BlockAt(i - 1).entry;
+          continue;
+        }
         NodePtr zeronode = Node::Create();
         // TODO(minjie): should be zero node.
         zeronode->attrs.op = Op::Get("_NoGradient");
@@ -1734,7 +1757,6 @@ Graph GraphPartitioner::Run() {
         // TODO(minjie): how to set variable node's parsed attribute?
         // Control dependency.
         zeronode->control_deps.push_back(node);
-        AssignDevice(node, default_group_);  // The original node is assigned to the default group.
         AssignDevice(zeronode, entry_grids[out_ent_id].BlockAt(i).device_group_id);
         FinalizeNodeCreation(zeronode);
         // Output entry and shape.
@@ -1866,7 +1888,7 @@ Graph GraphPartitioner::Run() {
       // Add control dependencies.
       out_node_copy->control_deps.push_back(entry_grids[entid].BlockAt(i).entry.node);
     }
-    AssignDevice(out_node_copy, default_group_);  // The original node is assigned to the default group.
+    AssignDefaultGroup(out_node_copy);  // The original node is assigned to the default group.
     ret.outputs.push_back(NodeEntry{out_node_copy, 0, 0});
   }
   const IndexedGraph& retgraph = ret.indexed_graph();
