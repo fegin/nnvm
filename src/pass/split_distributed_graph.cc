@@ -668,7 +668,7 @@ Graph SplitDistributedGraph(Graph src) {
   }
 
   //RemoveUnusedCopyNode(in, &out);
-#if 1
+#if 0
   AddSendDepencies(in, &out);
 #endif
   UpdateGraphAttributes(in, &out);
