@@ -253,7 +253,7 @@ static void CheckAndSplitInputs(const struct SplitGraphInputs& in,
         out->new_node_to_old_nid[recv_node.get()] = input_ientry.node_id;
         out->copy_entry_map[in.idx.entry_id(input_ientry)] = new_input_entry;
 
-	#if 0
+#if 1
         {
           std::vector<nnvm::NodeEntry> recv = {input_node->inputs[0]};
           NodePtr copy = nullptr;
