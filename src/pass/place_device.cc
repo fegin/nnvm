@@ -294,8 +294,10 @@ Graph PlaceDevice(Graph src) {
   }
   for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
     const auto& n = retidx[nid];
-    for (const auto& in : n.inputs) {
-      cout << "\tn" << in.node_id << " -> n" << nid << endl;
+    for (size_t idx = 0; idx < n.inputs.size(); ++idx) {
+      const auto& in = n.inputs[idx];
+      cout << "\t\"n" << in.node_id << "\":o" << in.index
+        << " -> \"n" << nid << "\":i" << idx << endl;
       touched_nodes[nid] = true;
       touched_nodes[in.node_id] = true;
     }
@@ -303,16 +305,39 @@ Graph PlaceDevice(Graph src) {
   for (const auto& kv : dev2nodes ) {
     const int dev = kv.first;
     const auto& nodes = kv.second;
-    cout << "\tsubgraph cluster" << dev << " {" << endl;
-    cout << "\t\tlabel=\"device #" << dev << "\"" << endl;
+    if (dev != 4) {
+      cout << "\tsubgraph cluster" << dev << " {" << endl;
+      cout << "\t\tlabel=\"device #" << dev << "\"" << endl;
+    }
     for (uint32_t nid : nodes) {
+      const auto& node = retidx[nid];
       if (!touched_nodes[nid]) {
         continue;
       }
-      cout << "\t\tn" << nid << " [label=\""
-        << "n" << nid << "_" << retidx[nid].source->attrs.name << "\"]" << endl;
+      ostringstream oss;
+      oss << "\t\tn" << nid << " ["
+        << "shape=record,"
+        << "label=\"";
+      oss << "{{";
+      for (size_t idx = 0; idx < node.inputs.size(); ++idx) {
+        oss << "<i" << idx << ">";
+        if (idx != node.inputs.size() - 1) {
+          oss << " | ";
+        }
+      }
+      oss << "} | n" << nid << "_" << node.source->attrs.name << " | {";
+      for (size_t idx = 0; idx < node.source->num_outputs(); ++idx) {
+        oss << "<o" << idx << ">";
+        if (idx != node.source->num_outputs() - 1) {
+          oss << " | ";
+        }
+      }
+      oss << "}}\"]";
+      cout << oss.str() << endl;
     }
-    cout << "\t}" << endl;
+    if (dev != 4) {
+      cout << "\t}" << endl;
+    }
   }
   cout << "}" << endl;
 

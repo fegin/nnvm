@@ -16,6 +16,7 @@
 #include <sstream>
 
 #include "./allreduce.h"
+#include "./grid.h"
 
 namespace nnvm {
 namespace pass {
@@ -381,70 +382,6 @@ class CutAlgorithm : public Tiling {
   std::vector<std::vector<DPState>> dp_states_;
 };
 
-// A structure that represents a subtensor.
-struct Block {
-  // Index within grid.
-  TShape index;
-  // Replication index.
-  uint32_t replication_id = 0;
-  // Device group.
-  uint32_t device_group_id = 0;
-  // NodeEntry of this block.
-  NodeEntry entry;
-};
-
-// A structure that represents a tensor that is partitioned as a grid of blocks(subtensors).
-class Grid {
- public:
-  typedef std::function<void(const Block& from, const TShape& from_shape,
-                             const std::vector<Block*>& to, const TShape& to_shape)> SplitFn;
-  typedef std::function<void(const std::vector<const Block*>& from, const TShape& from_shape,
-                             Block* to, const TShape& to_shape)> ConcatFn;
-  // Create grid from the partition schemes and the given shape. The NodeEntry of this
-  // grid will not be initialized. If the given scheme vector is empty, the grid
-  // will only consists of one block.
-  Grid(const TShape& shape, const std::vector<Scheme>& schemes);
-
-  const TShape& shape() const { return shape_; }
-
-  const TShape& block_shape() const { return block_shape_; }
-
-  const TShape& num_blocks() const { return num_blocks_; }
-
-  uint32_t num_replicates() const { return num_replicates_; }
-
-  bool replicate_is_reduction() const { return replicate_is_reduction_; }
-
-  const std::vector<std::pair<Scheme, size_t>>& schemes() const { return schemes_; }
-
-  size_t TotalNumBlocks() const { return blocks_.size(); }
-
-  Block& BlockAt(size_t i) { return blocks_[i]; }
-  const Block& BlockAt(size_t i) const { return blocks_[i]; }
-
-  void PushScheme(const Scheme& sch, size_t num_splits, SplitFn splitfn = nullptr);
-
-  std::pair<Scheme, size_t> PopScheme(ConcatFn concatfn = nullptr);
-
- private:
-  std::vector<std::pair<Scheme, size_t>> schemes_;
-  // Shape of the tensor represented by this grid.
-  TShape shape_;
-  // Shape of the blocks. All blocks are of the same shape.
-  TShape block_shape_;
-  // Number of blocks(subtensors) on each dimension.
-  TShape num_blocks_;
-  // Number of replicates (or reductions).
-  uint32_t num_replicates_ = 1;
-  // If true, the replication actually represents tensors to be reduced.
-  bool replicate_is_reduction_ = false;
-
-  // A vector representation of all the blocks. It also acts as the map from
-  // device_group_id to the block. For example, to get a block under
-  // device_group_id=3, just use blocks[3].
-  std::vector<Block> blocks_;
-};
-
 class GraphPartitioner {
  public:
   GraphPartitioner(const Tiling& tiling, Graph* src,
@@ -464,18 +401,26 @@ class GraphPartitioner {
   Graph Run();
 
  private:
-  void AssignDevice(NodePtr node, size_t device_group_id);
+  static std::string DevName(size_t device_group_id) {
+    return "group:" + std::to_string(device_group_id);
+  }
 
-  void AssignDefaultGroup(NodePtr node);
+  void AssignDevice(NodePtr node, size_t device_group_id) const;
 
-  std::vector<NodeEntry> SplitEntry(const NodeEntry& from, const TShape& ret_shape,
-                                    const std::string& name, size_t num_args, size_t dim,
-                                    size_t device_group_id);
+  void AssignDevice(NodePtr node, const std::string& device_name) const;
+
+  void AssignDefaultGroup(NodePtr node) const;
+
+  std::vector<NodeEntry> SplitEntry(const NodeEntry& from,
+                                    const TShape& ret_shape,
+                                    const std::string& prefix,
+                                    size_t num_args, size_t dim,
+                                    const std::string& device_name);
 
   NodeEntry ConcatEntry(const std::vector<NodeEntry>& from,
                         const TShape& ret_shape,
-                        const std::string& name, size_t dim,
-                        size_t device_group_id);
+                        const std::string& prefix, size_t dim,
+                        const std::string& device_name);
 
   void BroadcastEntries(const std::vector<int>& src_dev, const std::vector<int>& tgt_dev,
                         const TShape& shape, std::vector<NodeEntry>* dev_entries);
@@ -502,6 +447,11 @@ class GraphPartitioner {
                  const std::vector<Grid*>& outputs,
                  const std::vector<NodePtr>& nodes);
 
+  void SplitVariableGrid(const TShape& shape, const NodeEntry& entry, Grid* to_grid);
+
+  NodeEntry ConcatVariableGrid(const NodeEntry& origin_entry, const Grid& from_grid);
+
+ private:
   const Tiling& tiling_;
   Graph* src_graph_;
   std::unique_ptr<CommPlanner> comm_planner_;

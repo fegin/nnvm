@@ -170,73 +170,6 @@ vector<const T*> ExtractFromIndex(
   return ret;
 }
 
-class GridIndexMap {
- public:
-  GridIndexMap(const Grid& grid) {
-    gridindex2block_.resize(grid.TotalNumBlocks(), 0);
-    for (size_t i = 0; i < grid.TotalNumBlocks(); ++i) {
-      const Block& blk = grid.BlockAt(i);
-      const size_t hash = BlockIndexHash(grid, blk.index, blk.replication_id);
-      CHECK(hash < gridindex2block_.size());
-      gridindex2block_[hash] = i;
-    }
-  }
-
-  // Hash value of the given grid index. If the index is a valid one, the value is
-  // guaranteed to be within range [0, total_num_blocks).
-  static size_t BlockIndexHash(const Grid& grid, const TShape& index, uint32_t rep_id) {
-    CHECK_EQ(index.ndim(), grid.shape().ndim()) << grid.shape() << " " << index;
-    CHECK_LT(rep_id, grid.num_replicates());
-    size_t hash = 0, mult = 1;
-    for (int i = index.ndim() - 1; i >= 0; --i) {
-      CHECK_LT(index[i], grid.num_blocks()[i]);
-      hash += index[i] * mult;
-      mult *= grid.num_blocks()[i];
-    }
-    hash += rep_id * mult;
-    return hash;
-  }
-
-  inline const Block& GetBlock(const Grid& grid, const TShape& index, uint32_t rep_id) const {
-    size_t hash = gridindex2block_.at(BlockIndexHash(grid, index, rep_id));
-    return grid.BlockAt(hash);
-  }
-
-  inline Block& GetBlock(Grid& grid, const TShape& index, uint32_t rep_id) {
-    size_t hash = gridindex2block_.at(BlockIndexHash(grid, index, rep_id));
-    return grid.BlockAt(hash);
-  }
-
- private:
-  // A map from grid index to the block index in the vector representation.
-  // Since the grid index could be mapped to a continuous range from [0, total_num_blocks),
-  // a vector could be used here instead of a map.
-  std::vector<size_t> gridindex2block_;
-};
-
-class IndexIter {
- public:
-  IndexIter(const TShape& limit): limit_(limit), index_(limit.ndim(), 0) { }
-
-  bool Next() {
-    for (int i = index_.ndim() - 1; i >= 0; --i) {
-      index_[i] += 1;
-      if (index_[i] == limit_[i]) {
-        index_[i] = 0;
-      } else {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  const TShape& Get() const { return index_; }
-
- private:
-  // (No ownership).
-  const TShape& limit_;
-  TShape index_;
-};
 
 inline void FinalizeNodeCreation(NodePtr node) {
   static int count = 0;
@@ -1210,157 +1143,24 @@ cost_t CutAlgorithm::KCuts(uint32_t K) {
   return cut_cost + 2 * KCuts(K - 1);
 }
 
-Grid::Grid(const TShape& shape, const vector<Scheme>& schemes):
-  shape_(shape), block_shape_(shape), num_blocks_(shape.ndim()) {
-  // Initialize the grid with one block.
-  Block blk;
-  blk.index = TShape(shape.ndim(), 0);
-  blocks_.push_back(std::move(blk));
-  for (const Scheme& sch : schemes) {
-    if (sch.type == Scheme::kRed) {
-      replicate_is_reduction_ = true;
-      break;
-    }
-  }
-  // Partition the block using the given schemes.
-  // Loop the scheme list in reverse order since this is easier (and more efficient)
-  // for grid construction.
-  for (int i = schemes.size() - 1; i >= 0; --i) {
-    const Scheme& sch = schemes[i];
-    PushScheme(sch, 2);
-  }
-  CHECK_EQ(num_blocks_.Size() * num_replicates_, blocks_.size());
-  // Change the device group id for the blocks.
-  for (size_t i = 0; i < blocks_.size(); ++i) {
-    blocks_[i].device_group_id = i;
-  }
+void GraphPartitioner::AssignDevice(NodePtr node, size_t device_group_id) const {
+  node->attrs.dict["__ctx_group__"] = DevName(device_group_id);
 }
 
-void Grid::PushScheme(const Scheme& sch, size_t num_splits, Grid::SplitFn splitfn) {
-  if (num_splits <= 1) {
-    return;
-  }
-  schemes_.push_back(make_pair(sch, num_splits));
-  // Double the block list in the grid.
-  const size_t old_num_blks = blocks_.size();
-  const TShape old_block_shape = block_shape_;
-  vector<Block> new_blocks(num_splits * old_num_blks);
-  for (size_t i = 0; i < num_splits; ++i) {
-    std::copy(blocks_.begin(), blocks_.end(),
-              new_blocks.begin() + i * old_num_blks);
-  }
-  switch (sch.type) {
-  case Scheme::kCut:
-    {
-      // Change block index.
-      const int cut_dim = sch.dim;
-      for (size_t i = old_num_blks; i < new_blocks.size(); ++i) {
-        const size_t split_id = i / old_num_blks;
-        new_blocks[i].index[cut_dim] += split_id * num_blocks_[cut_dim];
-      }
-      num_blocks_[cut_dim] *= num_splits;
-      block_shape_[cut_dim] /= num_splits;
-      break;
-    }
-  case Scheme::kRep:
-    {
-      CHECK(!replicate_is_reduction_);
-      // Change replication index.
-      for (size_t i = old_num_blks; i < new_blocks.size(); ++i) {
-        const size_t split_id = i / old_num_blks;
-        new_blocks[i].replication_id += split_id * num_replicates_;
-      }
-      num_replicates_ *= num_splits;
-      break;
-    }
-  case Scheme::kRed:
-    {
-      CHECK(replicate_is_reduction_);
-      // Change replication index.
-      for (size_t i = old_num_blks; i < new_blocks.size(); ++i) {
-        const size_t split_id = i / old_num_blks;
-        new_blocks[i].replication_id += split_id * num_replicates_;
-      }
-      num_replicates_ *= num_splits;
-      break;
-    }
-  default:
-    LOG(FATAL) << "Invalid scheme type: " << sch.type;
-  }
-  if (splitfn) {
-    // Call splitfn.
-    vector<Block*> to(num_splits);
-    for (size_t i = 0; i < old_num_blks; ++i) {
-      for (size_t j = 0; j < num_splits; ++j) {
-        to[j] = &new_blocks[i + j * old_num_blks];
-      }
-      splitfn(blocks_[i], old_block_shape, to, block_shape_);
-    }
-  }
-  blocks_.swap(new_blocks);
+void GraphPartitioner::AssignDevice(NodePtr node, const std::string& device_name) const {
+  node->attrs.dict["__ctx_group__"] = device_name;
 }
 
-pair<Scheme, size_t> Grid::PopScheme(Grid::ConcatFn concatfn) {
-  const pair<Scheme, size_t> last = schemes_[schemes_.size() - 1];
-  const Scheme& sch = last.first;
-  const size_t num_splits = last.second;
-  schemes_.pop_back();
-  const size_t new_num_blks = blocks_.size() / num_splits;
-  const TShape old_block_shape = block_shape_;
-  vector<Block> new_blocks(new_num_blks);
-  std::copy(blocks_.begin(), blocks_.begin() + new_num_blks, new_blocks.begin());
-  switch (sch.type) {
-  case Scheme::kCut:
-    {
-      num_blocks_[sch.dim] /= num_splits;
-      block_shape_[sch.dim] *= num_splits;
-      break;
-    }
-  case Scheme::kRep:
-    {
-      CHECK(!replicate_is_reduction_);
-      num_replicates_ /= num_splits;
-      break;
-    }
-  case Scheme::kRed:
-    {
-      CHECK(replicate_is_reduction_);
-      num_replicates_ /= num_splits;
-      break;
-    }
-  default:
-    LOG(FATAL) << "Invalid scheme type: " << sch.type;
-  }
-  if (concatfn) {
-    // Call concatfn.
-    vector<const Block*> from(num_splits);
-    for (size_t i = 0; i < new_num_blks; ++i) {
-      for (size_t j = 0; j < num_splits; ++j) {
-        from[j] = &blocks_[i + j * new_num_blks];
-      }
-      concatfn(from, old_block_shape, &new_blocks[i], block_shape_);
-    }
-  }
-  blocks_.swap(new_blocks);
-  return last;
-}
-
-void GraphPartitioner::AssignDevice(NodePtr node, size_t device_group_id) {
-  if (oversharding_) {
-    device_group_id /= 2;
-  }
-  node->attrs.dict["__ctx_group__"] = "group:" + std::to_string(device_group_id);
-}
-
-void GraphPartitioner::AssignDefaultGroup(NodePtr node) {
+void GraphPartitioner::AssignDefaultGroup(NodePtr node) const {
   node->attrs.dict["__ctx_group__"] = default_group_;
 }
 
 vector<NodeEntry> GraphPartitioner::SplitEntry(
-    const NodeEntry& from, const TShape& ret_shape,
-    const std::string& name,
+    const NodeEntry& from,
+    const TShape& ret_shape,
+    const string& prefix,
     size_t num_args, size_t dim,
-    size_t device_group_id) {
+    const string& device_name) {
   CHECK_GT(num_args, 0);
   CHECK_LT(dim, ret_shape.ndim());
   if (num_args == 1) {
@@ -1369,7 +1169,7 @@ vector<NodeEntry> GraphPartitioner::SplitEntry(
   }
   // Split op name.
   ostringstream oss;
-  oss << "__" << name << "_split_" << dim;
+  oss << "_TOFU[" << prefix << "]SPLITd" << dim;
   // Split op.
   const Op* split_op = Op::Get("_backward_Concat");
   NodePtr node = Node::Create();
@@ -1378,7 +1178,7 @@ vector<NodeEntry> GraphPartitioner::SplitEntry(
   node->attrs.name = oss.str();
   node->attrs.dict["num_args"] = std::to_string(num_args);
   node->attrs.dict["dim"] = std::to_string(dim);
-  AssignDevice(node, device_group_id);
+  AssignDevice(node, device_name);
   FinalizeNodeCreation(node);
   // Create output entries.
   vector<NodeEntry> ret;
@@ -1394,8 +1194,8 @@ vector<NodeEntry> GraphPartitioner::SplitEntry(
 NodeEntry GraphPartitioner::ConcatEntry(
     const vector<NodeEntry>& from,
     const TShape& ret_shape,
-    const string& name, size_t dim,
-    size_t device_group_id) {
+    const string& prefix, size_t dim,
+    const string& device_name) {
   CHECK(!from.empty());
   CHECK_LT(dim, ret_shape.ndim());
   if (from.size() == 1) {
@@ -1405,7 +1205,7 @@ NodeEntry GraphPartitioner::ConcatEntry(
   const Op* concat_op = Op::Get("Concat");
   // Concat op name.
   ostringstream oss;
-  oss << "__" << name << "_concat_" << dim;
+  oss << "_TOFU[" << prefix << "]CONCATd" << dim;
   // Concat op.
   NodePtr node = Node::Create();
   node->inputs = from;
@@ -1413,7 +1213,7 @@ NodeEntry GraphPartitioner::ConcatEntry(
   node->attrs.name = oss.str();
   node->attrs.dict["num_args"] = std::to_string(from.size());
   node->attrs.dict["dim"] = std::to_string(dim);
-  AssignDevice(node, device_group_id);
+  AssignDevice(node, device_name);
   FinalizeNodeCreation(node);
   // Create output entries.
   NodeEntry to{node, 0, 0};
@@ -1491,7 +1291,7 @@ void GraphPartitioner::AllReduceBlocks(
                              "red",
                              outputs.size(),
                              0 /*split dim */,
-                             inputs[i]->device_group_id /*device id*/);
+                             DevName(inputs[i]->device_group_id) /*device*/);
   }
 
   // Multi-stage Allreduce.
@@ -1571,7 +1371,7 @@ void GraphPartitioner::AllReduceBlocks(
                                     shape,
                                     "red",
                                     0 /*concat dim*/,
-                                    outputs[i]->device_group_id /*device id*/);
+                                    DevName(outputs[i]->device_group_id) /*device id*/);
   }
 }
 
@@ -1596,7 +1396,8 @@ void GraphPartitioner::AllReduce(const Grid& input, Grid* output) {
   CHECK_GT(input.TotalNumBlocks(), 0);
   CHECK_EQ(input.num_blocks(), output->num_blocks());
   CHECK_EQ(input.block_shape(), output->block_shape());
-  GridIndexMap ingrid_idx(input), outgrid_idx(*output);
+  ConstGridIndexMap ingrid_idx(input);
+  GridIndexMap outgrid_idx(*output);
   IndexIter iter(input.num_blocks());
   vector<const Block*> input_blocks(input.num_replicates());
   vector<Block*> output_blocks(output->num_replicates());
@@ -1604,10 +1405,10 @@ void GraphPartitioner::AllReduce(const Grid& input, Grid* output) {
   do {
     const TShape& curidx = iter.Get();
     for (size_t repid = 0; repid < input.num_replicates(); ++repid) {
-      input_blocks[repid] = &(ingrid_idx.GetBlock(input, curidx, repid));
+      input_blocks[repid] = &(ingrid_idx.GetBlock(curidx, repid));
     }
     for (size_t repid = 0; repid < output->num_replicates(); ++repid) {
-      output_blocks[repid] = &(outgrid_idx.GetBlock(*output, curidx, repid));
+      output_blocks[repid] = &(outgrid_idx.GetBlock(curidx, repid));
     }
     if (input.replicate_is_reduction()) {
       AllReduceBlocks(input_blocks, output_blocks, input.block_shape());
@@ -1623,8 +1424,7 @@ void GraphPartitioner::ConvertGrid(const Grid& from, Grid* to) {
   if (from.num_blocks() == to->num_blocks() &&
       from.num_replicates() == to->num_replicates() &&
       !from.replicate_is_reduction()) {
-    // No need for conversion.
-    *to = from;
+    to->CopyFrom(from);
     return;
   }
   //LOG(INFO) << "Convert from: " << from.num_blocks() << "x" << from.num_replicates()
@@ -1638,27 +1438,34 @@ void GraphPartitioner::ConvertGrid(const Grid& from, Grid* to) {
   const TShape& extra_from_cuts = max_num_blocks / from.num_blocks();
   Grid from_split = from;
   for (size_t i = 0; i < extra_from_cuts.ndim(); ++i) {
-    if (extra_from_cuts[i] > 1) {
-      from_split.PushScheme(
-          Scheme::Cut(i), extra_from_cuts[i],
-          [&] (const Block& from, const TShape& from_shape,
-               const vector<Block*>& to, const TShape& to_shape) {
-            // Split function here.
-            const vector<NodeEntry>& splitted =
-              SplitEntry(from.entry, to_shape, "convert",
-                         to.size(), i, from.device_group_id);
-            for (uint32_t idx = 0; idx < to.size(); ++idx) {
-              CHECK_EQ(from.device_group_id, to[idx]->device_group_id);
-              to[idx]->entry = splitted[idx];
-            }
-          });
+    if (extra_from_cuts[i] <= 1) {
+      continue;
     }
+    from_split.InnerSplit(
+        Scheme::Cut(i), extra_from_cuts[i],
+        [&] (const Block& from, const TShape& from_shape,
+             const vector<Block*>& to, const TShape& to_shape) {
+          // Split function here.
+          const vector<NodeEntry>& splitted =
+            SplitEntry(from.entry, to_shape, "convert",
+                       to.size(), i /* dim */,
+                       DevName(from.device_group_id));
+          for (uint32_t idx = 0; idx < to.size(); ++idx) {
+            CHECK_EQ(from.device_group_id, to[idx]->device_group_id);
+            to[idx]->entry = splitted[idx];
+          }
+        });
   }
+  //cout << "Need to split: " << extra_from_cuts << endl;
+  //from.PrettyPrint();
+  //cout << "After inner split: " << endl;
+  //from_split.PrettyPrint();
   const TShape& extra_to_cuts = max_num_blocks / to->num_blocks();
   for (size_t i = 0; i < extra_to_cuts.ndim(); ++i) {
-    if (extra_to_cuts[i] > 1) {
-      to->PushScheme(Scheme::Cut(i), extra_to_cuts[i]);
+    if (extra_to_cuts[i] <= 1) {
+      continue;
     }
+    to->InnerSplit(Scheme::Cut(i), extra_to_cuts[i]);
   }
   CHECK_EQ(from_split.num_blocks(), to->num_blocks());
 
@@ -1668,7 +1475,7 @@ void GraphPartitioner::ConvertGrid(const Grid& from, Grid* to) {
   // Phase: Concat
   for (int i = extra_to_cuts.ndim() - 1; i >= 0; --i) {
     if (extra_to_cuts[i] > 1) {
-      to->PopScheme(
+      const auto& poped = to->InnerConcat(
           [&] (const vector<const Block*>& from, const TShape& from_shape,
                Block* to, const TShape& to_shape) {
             // Concat function.
@@ -1677,8 +1484,12 @@ void GraphPartitioner::ConvertGrid(const Grid& from, Grid* to) {
               CHECK_EQ(blk->device_group_id, to->device_group_id);
               ent.push_back(blk->entry);
             }
-            to->entry = ConcatEntry(ent, to_shape, "convert", i, to->device_group_id);
+            to->entry = ConcatEntry(ent, to_shape,
+              "convert", i /* dim */, DevName(to->device_group_id));
           });
+      CHECK(poped.first.type == Scheme::kCut);
+      CHECK(poped.first.dim == i);
+      CHECK(poped.second == extra_to_cuts[i]);
     }
   }
 }
@@ -1687,7 +1498,8 @@ void GraphPartitioner::PerformOp(const vector<const Grid*>& inputs,
                                  const vector<Grid*>& outputs,
                                  const vector<NodePtr>& nodes) {
   CHECK(!inputs.empty());
-  // Split operators.
+  // Sub-operators can simply fetch blocks under the same devices
+  // since all required data should be fetched to locally already.
   const uint32_t num_devices = nodes.size();
   // TODO(minjie): NodeEntry version?
   for (uint32_t dev = 0; dev < num_devices; ++dev) {
@@ -1702,12 +1514,132 @@ void GraphPartitioner::PerformOp(const vector<const Grid*>& inputs,
     }
   }
 }
+  
+void GraphPartitioner::SplitVariableGrid(
+    const TShape& shape,
+    const NodeEntry& entry,
+    Grid* to_grid) {
+  const int fake_var_split_concat = dmlc::GetEnv("TOFU_FAKE_VAR_SPLIT_CONCAT", 0);
+  if (fake_var_split_concat) {
+    // Use nop operators and control dependency to simulate the split
+    // while no real split/concat/copy happens.
+    for (size_t i = 0; i < to_grid->TotalNumBlocks(); ++i) {
+      NodePtr zeronode = Node::Create();
+      // TODO(minjie): should be zero node.
+      zeronode->attrs.op = Op::Get("_NoGradient");
+      zeronode->attrs.name = entry.node->attrs.name + "_" + std::to_string(i);
+      // Control dependency.
+      zeronode->control_deps.push_back(entry.node);
+      AssignDevice(zeronode, to_grid->BlockAt(i).device_group_id);
+      FinalizeNodeCreation(zeronode);
+      // Output entry and shape.
+      to_grid->BlockAt(i).entry = {zeronode, 0, 0};
+      CHECK(node_output_shapes_[zeronode].empty());
+      node_output_shapes_[zeronode].push_back(to_grid->block_shape());
+    }
+  } else {
+    Grid from_grid(shape, entry);
+    const TShape& ncuts_per_dim = to_grid->num_blocks();
+    const uint32_t nreps = to_grid->num_replicates();
+    // Cuts.
+    for (size_t i = 0; i < ncuts_per_dim.ndim(); ++i) {
+      if (ncuts_per_dim[i] <= 1) {
+        continue;
+      }
+      from_grid.OuterSplit(Scheme::Cut(i), ncuts_per_dim[i],
+          [&] (const Block& from, const TShape& from_shape,
+               const vector<Block*>& to, const TShape& to_shape) {
+            const vector<NodeEntry>& splitted =
+              SplitEntry(from.entry,
+                         to_shape, "var",
+                         to.size(), i /*dim*/,
+                         default_group_ /* device */);
+            for (uint32_t idx = 0; idx < to.size(); ++idx) {
+              to[idx]->entry = splitted[idx];
+            }
+          });
+    }
+    // Replicates.
+    from_grid.OuterSplit(Scheme::Rep(), nreps);
+    for (size_t i = 0; i < from_grid.TotalNumBlocks(); ++i) {
+      from_grid.BlockAt(i).device_group_id = i;
+    }
+    // Copy block entries to the target grid.
+    to_grid->CopyFrom(from_grid);
+  }
+}
+
+NodeEntry GraphPartitioner::ConcatVariableGrid(
+    const NodeEntry& original_entry,
+    const Grid& from_grid) {
+  const int fake_var_split_concat = dmlc::GetEnv("TOFU_FAKE_VAR_SPLIT_CONCAT", 0);
+  if (fake_var_split_concat) {
+    NodePtr fake_out_node = Node::Create();
+    // TODO(minjie): should be zero node.
+    fake_out_node->attrs.op = Op::Get("_NoGradient");
+    fake_out_node->attrs.name = original_entry.node->attrs.name;
+    FinalizeNodeCreation(fake_out_node);
+    CHECK(node_output_shapes_[fake_out_node].empty());
+    node_output_shapes_[fake_out_node].push_back(from_grid.shape());
+    for (size_t i = 0; i < from_grid.TotalNumBlocks(); ++i) {
+      // Add control dependencies.
+      fake_out_node->control_deps.push_back(from_grid.BlockAt(i).entry.node);
+    }
+    AssignDefaultGroup(fake_out_node);  // The fake node is assigned to the default group.
+    return NodeEntry{fake_out_node, 0, 0};
+  } else {
+    const TShape& ncuts_per_dim = from_grid.num_blocks();
+    const uint32_t nreps = from_grid.num_replicates();
+    // First do "fake" split to prepare for concatenation.
+    Grid to_grid(from_grid.shape(), vector<Scheme>());
+    for (size_t i = 0; i < ncuts_per_dim.ndim(); ++i) {
+      if (ncuts_per_dim[i] == 1) {
+        continue;
+      }
+      to_grid.OuterSplit(Scheme::Cut(i), ncuts_per_dim[i]);
+    }
+    if (nreps > 1) {
+      to_grid.OuterSplit(Scheme::Rep(), nreps);
+    }
+
+    to_grid.CopyFrom(from_grid);
+
+    // "Concat" replication.
+    if (nreps > 1) {
+      to_grid.OuterConcat();
+    }
+    // Concat.
+    for (int i = ncuts_per_dim.ndim() - 1; i >= 0; --i) {
+      if (ncuts_per_dim[i] <= 1) {
+        continue;
+      }
+      const auto& poped = to_grid.OuterConcat(
+        [&] (const vector<const Block*>& from, const TShape& from_shape,
+             Block* to, const TShape& to_shape) {
+          // Concat function.
+          vector<NodeEntry> ent;
+          for (auto blk : from) {
+            ent.push_back(blk->entry);
+          }
+          to->entry = ConcatEntry(ent,
+                                  to_shape, "var",
+                                  i /* dim */,
+                                  default_group_ /* device */);
+        });
+      CHECK(poped.first.type == Scheme::kCut);
+      CHECK(poped.first.dim == i);
+      CHECK(poped.second == ncuts_per_dim[i]);
+    }
+    CHECK_EQ(to_grid.num_blocks().Size(), 1); // The result should be only one entry.
+    return to_grid.BlockAt(0).entry;
+  }
+}
 
 Graph GraphPartitioner::Run() {
-  // TODO:
-  // - control dependencies
+  // TODO(minjie):
+  // - Control dependencies
   // - NodeEntry versions
-  // - Shape vector
+  // - Node version
   
   const IndexedGraph& graph = src_graph_->indexed_graph();
   const ShapeVector& shapes = src_graph_->GetAttr<ShapeVector>("shape");
@@ -1723,47 +1655,28 @@ Graph GraphPartitioner::Run() {
   vector<vector<NodePtr>> splitted_nodes;
   splitted_nodes.resize(graph.num_nodes());
 
+  // Construct grids for each node entry.
   for (uint32_t entid = 0; entid < graph.num_node_entries(); ++entid) {
     //LOG(INFO) << "Split entry#" << entid;
     const TShape& shape = shapes[entid];
     const vector<Scheme>& schemes = tiling_.GetEntrySchemes(entid);
     entry_grids.emplace_back(shape, schemes);
   }
+
+  // Construct grids for operator's input/output. Construct splitted operator.
   DFSVisit( src_graph_->outputs, [&](const NodePtr& node) {
     const uint32_t nodeid = graph.node_id(node.get());
     LOG(INFO) << "Process node#" << nodeid << ": " << node->attrs.name;
     if (node->is_variable()) {
       // Variable node does not have input/output grid because it is always
-      // aligned.
+      // aligned. Split node will be created to dispatch the data to different devices.
       const uint32_t out_ent_id = graph.entry_id(nodeid, 0);
-      // TODO(minjie): Currently we use a control dependency to a series of zero operators
-      // here to simulate the computation while ignore the copy time from CPU to each card.
+      const NodeEntry out_ent{node, 0, 0};
       CHECK(node_output_shapes_[node].empty());
       node_output_shapes_[node].push_back(shapes[out_ent_id]);
       AssignDefaultGroup(node);  // The original node is assigned to the default group.
+      SplitVariableGrid(shapes[out_ent_id], out_ent, &entry_grids[out_ent_id]);
       // TODO: version ?
-      for (size_t i = 0; i < entry_grids[out_ent_id].TotalNumBlocks(); ++i) {
-        if (oversharding_ && i % 2 == 1) {
-          // TODO(minjie): Currently all oversharded blocks will share the same variable node.
-          // However, a correct way is to share only "replicated" nodes. For row/col partitioend
-          // nodes, they should be separate.
-          entry_grids[out_ent_id].BlockAt(i).entry = entry_grids[out_ent_id].BlockAt(i - 1).entry;
-          continue;
-        }
-        NodePtr zeronode = Node::Create();
-        // TODO(minjie): should be zero node.
-        zeronode->attrs.op = Op::Get("_NoGradient");
-        zeronode->attrs.name = node->attrs.name + "_" + std::to_string(i);
-        // TODO(minjie): how to set variable node's parsed attribute?
-        // Control dependency.
-        zeronode->control_deps.push_back(node);
-        AssignDevice(zeronode, entry_grids[out_ent_id].BlockAt(i).device_group_id);
-        FinalizeNodeCreation(zeronode);
-        // Output entry and shape.
-        entry_grids[out_ent_id].BlockAt(i).entry = {zeronode, 0, 0};
-        CHECK(node_output_shapes_[zeronode].empty());
-        node_output_shapes_[zeronode].push_back(entry_grids[out_ent_id].block_shape());
-      }
       return;
     }
     const vector<SchemeRequest>& allreqs = tiling_.GetSchemeRequests(nodeid);
@@ -1835,6 +1748,7 @@ Graph GraphPartitioner::Run() {
     }
   });
     
+  // Connect splitted operator to form new graph.
   DFSVisit(src_graph_->outputs, [&](const NodePtr& node) {
     //LOG(INFO) << "Processing Node: " << node->attrs.name;
     const uint32_t nodeid = graph.node_id(node.get());
@@ -1877,19 +1791,7 @@ Graph GraphPartitioner::Run() {
     // Currently we use control dependency to simulate the computation while
     // saving the copy from multiple gpus to cpu.
     const uint32_t entid = graph.entry_id(out_ent);
-    NodePtr out_node_copy = Node::Create();
-    // TODO(minjie): should be zero node.
-    out_node_copy->attrs.op = Op::Get("_NoGradient");
-    out_node_copy->attrs.name = out_ent.node->attrs.name;
-    FinalizeNodeCreation(out_node_copy);
-    CHECK(node_output_shapes_[out_node_copy].empty());
-    node_output_shapes_[out_node_copy].push_back(shapes[entid]);
-    for (size_t i = 0; i < entry_grids[entid].TotalNumBlocks(); ++i) {
-      // Add control dependencies.
-      out_node_copy->control_deps.push_back(entry_grids[entid].BlockAt(i).entry.node);
-    }
-    AssignDefaultGroup(out_node_copy);  // The original node is assigned to the default group.
-    ret.outputs.push_back(NodeEntry{out_node_copy, 0, 0});
+    ret.outputs.push_back(ConcatVariableGrid(out_ent, entry_grids[entid]));
   }
   const IndexedGraph& retgraph = ret.indexed_graph();
   LOG(INFO) << "Original Graph: #Nodes=" << graph.num_nodes()
