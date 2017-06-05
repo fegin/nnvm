@@ -177,7 +177,7 @@ inline Graph Gradient(
     std::vector<NodeEntry> ys,
     std::vector<NodeEntry> xs,
     std::vector<NodeEntry> ys_out_grad,
-    std::function<NodeEntry(std::vector<NodeEntry>&& inputs)> aggregate_fun = nullptr,
+    std::function<NodeEntry(const std::vector<NodeEntry>& inputs)> aggregate_fun = nullptr,
     std::function<int(const Node& node)> mirror_fun = nullptr,
     std::function<NodeEntry(const NodeEntry& src, const NodeEntry &like)>
     attr_hint_fun = nullptr) {

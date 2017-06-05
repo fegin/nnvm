@@ -16,9 +16,9 @@ namespace {
 
 // default aggregate gradient function
 // require operator __zero__ and __ewise_sum__ to be presented.
-NodeEntry DefaultAggregateGradient(std::vector<NodeEntry>&& v) {
+NodeEntry DefaultAggregateGradient(const std::vector<NodeEntry>& v) {
   if (v.size() == 1) {
-    return std::move(v[0]);
+    return v[0];
   } else if (v.size() == 0) {
     NodePtr zero_node = Node::Create();
     zero_node->attrs.op = Op::Get("__zero__");
@@ -26,7 +26,7 @@ NodeEntry DefaultAggregateGradient(std::vector<NodeEntry>&& v) {
   } else {
     NodePtr sum_node = Node::Create();
     sum_node->attrs.op = Op::Get("__ewise_sum__");
-    sum_node->inputs = std::move(v);
+    sum_node->inputs = v;
     return NodeEntry{sum_node, 0, 0};
   }
 }
@@ -57,7 +57,7 @@ Graph Gradient(Graph src) {
       src.GetAttr<std::vector<NodeEntry> >("grad_ys_out_grad");
   const std::vector<NodeEntry>& xs =
       src.GetAttr<std::vector<NodeEntry> >("grad_xs");
-  using AggFun = std::function<NodeEntry (std::vector<NodeEntry>&& inputs)>;
+  using AggFun = std::function<NodeEntry (const std::vector<NodeEntry>& inputs)>;
   AggFun agg_fun = DefaultAggregateGradient;
   if (src.attrs.count("grad_aggregate_fun") != 0) {
     agg_fun = src.GetAttr<AggFun>("grad_aggregate_fun");
@@ -111,7 +111,7 @@ Graph Gradient(Graph src) {
     if (ptr->is_variable()) continue;
     out_agg_grads.clear();
     for (GradEntry& e : output_grads.at(ptr.get())) {
-      e.sum = agg_fun(std::move(e.grads));
+      e.sum = agg_fun(e.grads);
       out_agg_grads.push_back(e.sum);
     }
     const std::vector<NodeEntry>& input_grads = grad_fun_map[ptr->op()]
@@ -130,7 +130,7 @@ Graph Gradient(Graph src) {
     for (GradEntry& grad_entry : map_pair.second) {
       // Aggregate sum if there haven't been.
       if (!grad_entry.sum.node) {
-        grad_entry.sum = agg_fun(std::move(grad_entry.grads));
+        grad_entry.sum = agg_fun(grad_entry.grads);
       }
     }
   }
@@ -151,8 +151,8 @@ Graph Gradient(Graph src) {
 
   // Save the entry mapping to the "forward2backward" and "backward2forward" attributes.
   const IndexedGraph& idxgraph = ret.indexed_graph();
-  std::unordered_map<uint32_t, uint32_t> forward2backward;
-  std::unordered_map<uint32_t, uint32_t> backward2forward;
+  std::unordered_map<uint32_t, std::vector<uint32_t>> forward2backward;
+  std::unordered_map<uint32_t, std::vector<uint32_t>> backward2forward;
   for (const auto& map_pair : output_grads) {
     const Node* node = map_pair.first;  // Forward node.
     const uint32_t nodeid = idxgraph.node_id(node);
@@ -164,13 +164,22 @@ Graph Gradient(Graph src) {
         // propagation. In this case, simply ignore it in the entry mapping.
         // NOTE: this also means not all the forward node entries are contained in the
         // gradient mapping.
+        // LOG(INFO) << "Ignore forward node " << node->attrs.name << " output#" << i;
         continue;
       }
       const uint32_t forward_entid = idxgraph.entry_id(nodeid, i);
-      const uint32_t backward_entid = idxgraph.entry_id(map_pair.second[i].sum);
-      forward2backward[forward_entid] = backward_entid;
-      backward2forward[backward_entid] = forward_entid;
-      //LOG(INFO) << "Map between: " << forward_entid << " and " << backward_entid;
+      // First map the forward entry to the output of the grad summation.
+      const uint32_t gradsum_entid = idxgraph.entry_id(map_pair.second[i].sum);
+      forward2backward[forward_entid].push_back(gradsum_entid);
+      backward2forward[gradsum_entid].push_back(forward_entid);
+      //LOG(INFO) << "Map between: " << forward_entid << " and " << gradsum_entid;
+      // Then map the forward entry to all the inputs of the grad summation.
+      for (const NodeEntry& gradsum_in_ent : map_pair.second[i].grads) {
+        const uint32_t gradsum_in_entid = idxgraph.entry_id(gradsum_in_ent);
+        forward2backward[forward_entid].push_back(gradsum_in_entid);
+        backward2forward[gradsum_in_entid].push_back(forward_entid);
+        //LOG(INFO) << "Map between: " << forward_entid << " and " << gradsum_in_entid;
+      }
     }
   }
   ret.attrs["forward2backward"] = std::make_shared<any>(std::move(forward2backward));

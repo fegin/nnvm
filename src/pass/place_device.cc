@@ -55,6 +55,64 @@ void RemapEntryAttributes(
   newgraph->attrs[attr_name] = std::make_shared<any>(std::move(new_attr_vec));
 }
 
+void PlotGraph(Graph g, const DeviceVector& new_device_vec) {
+  const auto& retidx = g.indexed_graph();
+  cout << "digraph {" << endl;
+  vector<bool> touched_nodes(retidx.num_nodes(), false);
+  map<int, vector<uint32_t>> dev2nodes;
+  for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
+    dev2nodes[new_device_vec[nid]].push_back(nid);
+  }
+  for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
+    const auto& n = retidx[nid];
+    for (size_t idx = 0; idx < n.inputs.size(); ++idx) {
+      const auto& in = n.inputs[idx];
+      cout << "\t\"n" << in.node_id << "\":o" << in.index
+        << " -> \"n" << nid << "\":i" << idx << endl;
+      touched_nodes[nid] = true;
+      touched_nodes[in.node_id] = true;
+    }
+  }
+  for (const auto& kv : dev2nodes ) {
+    const int dev = kv.first;
+    const auto& nodes = kv.second;
+    if (dev != 4) {
+      cout << "\tsubgraph cluster" << dev << " {" << endl;
+      cout << "\t\tlabel=\"device #" << dev << "\"" << endl;
+    }
+    for (uint32_t nid : nodes) {
+      const auto& node = retidx[nid];
+      if (!touched_nodes[nid]) {
+        continue;
+      }
+      ostringstream oss;
+      oss << "\t\tn" << nid << " ["
+        << "shape=record,"
+        << "label=\"";
+      oss << "{{";
+      for (size_t idx = 0; idx < node.inputs.size(); ++idx) {
+        oss << "<i" << idx << ">";
+        if (idx != node.inputs.size() - 1) {
+          oss << " | ";
+        }
+      }
+      oss << "} | n" << nid << "_" << node.source->attrs.name << " | {";
+      for (size_t idx = 0; idx < node.source->num_outputs(); ++idx) {
+        oss << "<o" << idx << ">";
+        if (idx != node.source->num_outputs() - 1) {
+          oss << " | ";
+        }
+      }
+      oss << "}}\"]";
+      cout << oss.str() << endl;
+    }
+    if (dev != 4) {
+      cout << "\t}" << endl;
+    }
+  }
+  cout << "}" << endl;
+}
+
 // simply logic to place device according to device_group hint
 // insert copy node when there is
 Graph PlaceDevice(Graph src) {
@@ -132,6 +190,7 @@ Graph PlaceDevice(Graph src) {
     src.attrs.erase("device_assign_map");
     src.attrs.erase("device_copy_op");
     src.attrs["device"] = std::make_shared<any>(std::move(device));
+    //PlotGraph(src, src.GetAttr<DeviceVector>("device"));
     return src;
   }
 
@@ -286,60 +345,7 @@ Graph PlaceDevice(Graph src) {
   //}
 
   // Generate dot graph.
-  cout << "digraph {" << endl;
-  vector<bool> touched_nodes(retidx.num_nodes(), false);
-  map<int, vector<uint32_t>> dev2nodes;
-  for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
-    dev2nodes[new_device_vec[nid]].push_back(nid);
-  }
-  for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
-    const auto& n = retidx[nid];
-    for (size_t idx = 0; idx < n.inputs.size(); ++idx) {
-      const auto& in = n.inputs[idx];
-      cout << "\t\"n" << in.node_id << "\":o" << in.index
-        << " -> \"n" << nid << "\":i" << idx << endl;
-      touched_nodes[nid] = true;
-      touched_nodes[in.node_id] = true;
-    }
-  }
-  for (const auto& kv : dev2nodes ) {
-    const int dev = kv.first;
-    const auto& nodes = kv.second;
-    if (dev != 4) {
-      cout << "\tsubgraph cluster" << dev << " {" << endl;
-      cout << "\t\tlabel=\"device #" << dev << "\"" << endl;
-    }
-    for (uint32_t nid : nodes) {
-      const auto& node = retidx[nid];
-      if (!touched_nodes[nid]) {
-        continue;
-      }
-      ostringstream oss;
-      oss << "\t\tn" << nid << " ["
-        << "shape=record,"
-        << "label=\"";
-      oss << "{{";
-      for (size_t idx = 0; idx < node.inputs.size(); ++idx) {
-        oss << "<i" << idx << ">";
-        if (idx != node.inputs.size() - 1) {
-          oss << " | ";
-        }
-      }
-      oss << "} | n" << nid << "_" << node.source->attrs.name << " | {";
-      for (size_t idx = 0; idx < node.source->num_outputs(); ++idx) {
-        oss << "<o" << idx << ">";
-        if (idx != node.source->num_outputs() - 1) {
-          oss << " | ";
-        }
-      }
-      oss << "}}\"]";
-      cout << oss.str() << endl;
-    }
-    if (dev != 4) {
-      cout << "\t}" << endl;
-    }
-  }
-  cout << "}" << endl;
+  //PlotGraph(ret, new_device_vec);
 
   ret.attrs["device"] = std::make_shared<any>(std::move(new_device_vec));
   return ret;

@@ -25,7 +25,9 @@ class GraphAllocator {
   static const StorageID kExternalStorageID = -2;
   // request a free storage
   StorageID Request(int dev_id, int dtype, TShape shape, uint32_t node_id) {
-    if (shape.ndim() == 0) return kBadStorageID;
+    if (shape.ndim() == 0) {
+      return kBadStorageID;
+    }
     // search memory block in [size / match_range_, size * match_range_)
     // TODO(tqchen) add size of the dtype, assume 4 bytes for now
     size_t size = shape.Size() * 4;

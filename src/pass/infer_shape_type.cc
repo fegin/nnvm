@@ -118,24 +118,26 @@ Graph InferAttr(Graph &&ret,
   }
   // Inference & check shapes using gradient entry mapping if available.
   if (ret.attrs.count("forward2backward") != 0) {
-    const unordered_map<uint32_t, uint32_t>& forward2backward
-      = ret.GetAttr<unordered_map<uint32_t, uint32_t>>("forward2backward");
+    const unordered_map<uint32_t, vector<uint32_t>>& forward2backward
+      = ret.GetAttr<unordered_map<uint32_t, vector<uint32_t>>>("forward2backward");
     for (const auto& fwd2bwd : forward2backward) {
       const uint32_t fwd_ent_id = fwd2bwd.first;
-      const uint32_t bwd_ent_id = fwd2bwd.second;
-      if (fis_none(inferred[bwd_ent_id])) {
-        inferred[bwd_ent_id] = inferred[fwd_ent_id];
-      } else {
-        CHECK_EQ(inferred[bwd_ent_id], inferred[fwd_ent_id])
-          << inferred[bwd_ent_id] << " v.s. " << inferred[fwd_ent_id]
-          << " Backward entry (#" << bwd_ent_id << ") should have the same infer value"
-          << " with its corresponding forward (#" << fwd_ent_id << ") entry.";
+      for (const uint32_t bwd_ent_id : fwd2bwd.second) {
+        if (fis_none(inferred[bwd_ent_id])) {
+          inferred[bwd_ent_id] = inferred[fwd_ent_id];
+        } else {
+          CHECK_EQ(inferred[bwd_ent_id], inferred[fwd_ent_id])
+            << inferred[bwd_ent_id] << " v.s. " << inferred[fwd_ent_id]
+            << " Backward entry (#" << bwd_ent_id << ") should have the same infer value"
+            << " with its corresponding forward (#" << fwd_ent_id << ") entry.";
+        }
       }
     }
   }
   // set the shapes
   ret.attrs[attr_name] = std::make_shared<any>(std::move(inferred));
   // Number of entries that could not be inferred from this pass.
+  LOG(INFO) << "Unknown shape/type: " << num_unknown;
   ret.attrs[unknown_name] = std::make_shared<any>(num_unknown);
   return ret;
 }
