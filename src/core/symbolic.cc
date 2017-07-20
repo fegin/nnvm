@@ -53,7 +53,7 @@ inline std::string DefaultVarName(const std::string &op_name,
   if (op_name.length() == 0) {
     return arg_name;
   } else {
-    return op_name + '_' + arg_name;
+    return op_name + '/' + arg_name;
   }
 }
 

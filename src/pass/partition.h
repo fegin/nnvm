@@ -33,20 +33,20 @@ class NodeEntryGroups {
   // together. NodeEntry without any groups could be missing in the map, and they will be put in
   // a group that has only one node entry.
   NodeEntryGroups(uint32_t num_node_entries,
-                  const std::unordered_map<uint32_t, uint32_t>& equals);
+                  const std::vector<std::pair<uint32_t, uint32_t>>& equals);
 
   const std::unordered_set<uint32_t>& operator[](uint32_t group_id) const {
     return groups_[group_id];
   }
   uint32_t group_id(uint32_t entry_id) const {
-    return entry2group_.at(entry_id);
+    return entry2group_[entry_id];
   }
 
  private:
   // Each group is a set of NodeEntryId.
   std::vector<std::unordered_set<uint32_t>> groups_;
   // Map from NodeEntryId to NodeEntryGroupId.
-  std::unordered_map<uint32_t, uint32_t> entry2group_;
+  std::vector<uint32_t> entry2group_;
 };
 
 class Levels {

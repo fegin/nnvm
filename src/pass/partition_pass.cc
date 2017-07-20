@@ -62,8 +62,8 @@ Graph PartitionPass(Graph src) {
     << "Gradient entry mapping information is required.";
   CHECK_NE(src.attrs.count("num_devices"), 0)
     << "Require number of devices for partitioning";
-  const unordered_map<uint32_t, uint32_t>& backward2forward =
-    src.GetAttr<unordered_map<uint32_t, uint32_t>>("backward2forward");
+  const unordered_map<uint32_t, std::vector<uint32_t>>& backward2forward =
+    src.GetAttr<unordered_map<uint32_t, std::vector<uint32_t>>>("backward2forward");
   const string& tiling_type = dmlc::GetEnv("TOFU_TILING_TYPE", string("kcuts"));
   const int oversharding = dmlc::GetEnv("TOFU_OVERSHARDING", 0);
   const int num_devices = src.GetAttr<int>("num_devices");
@@ -77,30 +77,53 @@ Graph PartitionPass(Graph src) {
   const uint32_t start_node_id = graph.node_id(src.outputs[0].node.get());
   // Construct equal set from gradient information. All output gradient entry should have the
   // same partition scheme with its corresponding input entry.
-  unordered_map<uint32_t, uint32_t> equal;
+  vector<pair<uint32_t, uint32_t>> equal;
   for (const NodeEntry& out_ent : src.outputs) {
     const uint32_t out_ent_id = graph.entry_id(out_ent);
     if (backward2forward.find(out_ent_id) != backward2forward.end()) {
       // This is a gradient output entry. Add equilibrium of it and its forward entry.
-      const uint32_t fwd_ent_id = backward2forward.at(out_ent_id);
-      equal[out_ent_id] = fwd_ent_id;
+      const uint32_t fwd_ent_id = backward2forward.at(out_ent_id)[0];
+      equal.emplace_back(out_ent_id, fwd_ent_id);
     }
   }
+  // Set all element-wise operators' input and output entries to have the same partition.
+  /*for (uint32_t nid = 0; nid < graph.num_nodes(); ++nid) {
+    const Node* node = graph[nid].source;
+    if (node->is_variable()) {
+      continue;
+    }
+    const auto& opname = node->op()->name;
+    if (opname == "Activation" ||
+        opname == "elemwise_add" ||
+        opname == "_backward_Activation" ||
+        opname == "ElementWiseSum" ||
+        opname == "_backward_add") {
+      CHECK_GT(node->inputs.size(), 0);
+      const uint32_t inent0_id = graph.entry_id(node->inputs[0]);
+      for (size_t i = 1; i < node->inputs.size(); ++i) {
+        equal.emplace_back(graph.entry_id(node->inputs[i]), inent0_id);
+      }
+      for (size_t i = 0; i < node->num_outputs(); ++i) {
+        equal.emplace_back(graph.entry_id(nid, i), inent0_id);
+      }
+    }
+  }*/
+
   NodeEntryGroups groups(graph.num_node_entries(), equal);
 
   // Call BFS.
-  //BFS bfs(&src, &groups);
-  //bfs.Run(start_node_id);
-  //bfs.Print();
+  BFS lvls(&src, &groups);
+  lvls.Run(start_node_id);
+  lvls.Print();
   // TODO(minjie): chaos ownership
-  NeuralLevels nnlvls(&src, &groups);
-  nnlvls.Run();
-  nnlvls.Print();
+  //NeuralLevels lvls(&src, &groups);
+  //lvls.Run();
+  //lvls.Print();
 
   Tiling* tiling = nullptr;
   if (tiling_type == "kcuts") {
     // Cut algorithm.
-    CutAlgorithm* algo = new CutAlgorithm(&src, nnlvls, groups);
+    CutAlgorithm* algo = new CutAlgorithm(&src, lvls, groups);
     cost_t total_cost = 0;
     total_cost = algo->KCuts(num_cuts);
     algo->Print();

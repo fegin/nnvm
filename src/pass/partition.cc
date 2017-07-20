@@ -101,7 +101,7 @@ int _GetNumCuts(int num_devices) {
 string GetPrefix(const string& str) {
   // TODO(minjie): Very ugly way of getting forward op name.
   string ret;
-  size_t pos = str.find_last_of('_');
+  size_t pos = str.find_last_of('/');
   if (pos == 0 || pos == string::npos) {
     return str;
   } else {
@@ -118,7 +118,8 @@ bool NextScheme(const TShape& shape, Scheme* scheme) {
   }
   CHECK_EQ(scheme->type, Scheme::kCut);
   CHECK_GE(scheme->dim, 0);
-  if (scheme->dim + 1 < shape.ndim()) {
+  if (scheme->dim + 1 < shape.ndim() && scheme->dim + 1 < 2) { 
+    // TODO(minjie): currently only consider partition on first two dimensions.
     ++scheme->dim;
   } else {
     scheme->dim = -1;
@@ -197,27 +198,41 @@ inline vector<int> GetDevId(const vector<T>& inputs) {
 }  // namespace
 
 NodeEntryGroups::NodeEntryGroups(
-    uint32_t num_node_entries, const std::unordered_map<uint32_t, uint32_t>& equals) {
-  // TODO(minjie): Currently only support disjoint equal pairs.
+    uint32_t num_node_entries,
+    const std::vector<std::pair<uint32_t, uint32_t>>& equals)
+  : groups_(num_node_entries), entry2group_(num_node_entries) {
+  // Union-find
+  vector<uint32_t> groups(num_node_entries);
+  for (uint32_t eid = 0; eid < num_node_entries; ++eid) {
+    groups[eid] = eid;
+  }
   for (const auto& eq : equals) {
-    const uint32_t ent1 = eq.first;
-    const uint32_t ent2 = eq.second;
-    CHECK(entry2group_.find(ent1) == entry2group_.end());
-    CHECK(entry2group_.find(ent2) == entry2group_.end());
-    const uint32_t groupid = groups_.size();
-    entry2group_[ent1] = groupid;
-    entry2group_[ent2] = groupid;
-    groups_.push_back({ent1, ent2});
+    uint32_t g1 = eq.first;
+    uint32_t g2 = eq.second;
+    while (groups[g1] != g1) g1 = groups[g1];
+    while (groups[g2] != g2) g2 = groups[g2];
+    const uint32_t group = std::min(g1, g2);
+    groups[g1] = group;
+    groups[g2] = group;
+    groups[eq.first] = group;
+    groups[eq.second] = group;
   }
-  // Add remaining entries.
-  for (uint32_t entry_id = 0; entry_id < num_node_entries; ++entry_id) {
-    if (entry2group_.find(entry_id) == entry2group_.end()) {
-      if (equals.find(entry_id) == equals.end()) {
-        entry2group_[entry_id] = groups_.size();
-        groups_.push_back({entry_id});
-      }
+  for (uint32_t eid = 0; eid < num_node_entries; ++eid) {
+    uint32_t g = groups[eid];
+    while (g != groups[g]) g = groups[g];
+    entry2group_[eid] = g;
+    groups_[g].insert(eid);
+  }
+  /*for (uint32_t eid = 0; eid < num_node_entries; ++eid) {
+    cout << "Entry#" << eid << ": group#" << entry2group_[eid] << endl;
+  }
+  for (uint32_t gid = 0; gid < num_node_entries; ++gid) {
+    cout << "Group#" << gid << " {";
+    for (const auto& x : groups_[gid]) {
+      cout << x << " ";
     }
-  }
+    cout << "}" << endl;
+  }*/
 }
 
 void Levels::AddNode(uint32_t levelid, uint32_t nodeid) {
@@ -248,7 +263,8 @@ void Levels::AddNodeEntry(uint32_t levelid, uint32_t entry_id) {
   entry_group_levels_[levelid].push_back(entry_group_id);
   // For all entry in the group, make its index.
   for (const uint32_t ent : (*entry_groups_)[entry_group_id]) {
-    CHECK(entry2index_.find(ent) == entry2index_.end()) << "Entry should not be added twice";
+    CHECK(entry2index_.find(ent) == entry2index_.end())
+      << "Entry should not be added twice (" << ent << ").";
     entry2index_[ent] = make_pair(levelid, level_index);
   }
 }
@@ -264,12 +280,22 @@ BFS::BFS(Graph* src, const NodeEntryGroups* groups): Levels(groups), src_graph_(
       const uint32_t in_ent_id = graph.entry_id(in_ent);
       entry_to_nodes_[in_ent_id].insert(node_id);
       node_to_entries_[node_id].insert(in_ent_id);
+      // Also put all the entries in the same group in the map.
+      for (const uint32_t peer : (*groups)[groups->group_id(in_ent_id)]) {
+        entry_to_nodes_[peer].insert(node_id);
+        node_to_entries_[node_id].insert(peer);
+      }
     }
     // For all output entries, put the node in the adj list.
     for (uint32_t outidx = 0; outidx < node.source->num_outputs(); ++outidx) {
       const uint32_t out_ent_id = graph.entry_id(node_id, outidx);
       entry_to_nodes_[out_ent_id].insert(node_id);
       node_to_entries_[node_id].insert(out_ent_id);
+      // Also put all the entries in the same group in the map.
+      for (const uint32_t peer : (*groups)[groups->group_id(out_ent_id)]) {
+        entry_to_nodes_[peer].insert(node_id);
+        node_to_entries_[node_id].insert(peer);
+      }
     }
   }
 }
@@ -357,7 +383,7 @@ NeuralLevels::NeuralLevels(Graph* src, const NodeEntryGroups* groups):
   unordered_map<string, size_t> prefix2group;
   for (uint32_t nodeid = 0; nodeid < graph.num_nodes(); ++nodeid) {
     const string& name = graph[nodeid].source->attrs.name;
-    CHECK(name == "" || name[0] == '_' || name.find_first_of('_') == name.find_last_of('_'))
+    CHECK(name == "" || name.find_first_of('/') == name.find_last_of('/'))
       << "Unsupported node name: \"" << name << "\"";
     if (name == "" || name == "sum_grad") {
       // TODO(minjie): This is an ugly way to ignore non-symbolic operators.
@@ -872,7 +898,7 @@ void CutAlgorithm::Init() {
       // Create new state for each scheme combinations of the entries in this level.
       dp_states_[i].emplace_back(schemes);
     }
-    //LOG(INFO) << "DP Level #" << i << " size=" << dp_states_[i].size();
+    LOG(INFO) << "DP Level #" << i << " size=" << dp_states_[i].size();
   }
 }
 
