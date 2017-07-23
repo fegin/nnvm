@@ -89,6 +89,14 @@ inline bool EndsWith(const string& value, const string& ending) {
   if (ending.size() > value.size()) return false;
   return std::equal(ending.rbegin(), ending.rend(), value.rbegin());
 }
+inline bool StartsWith(const string& value, const string& starting) {
+  if (starting.size() > value.size()) return false;
+  return std::equal(starting.begin(), starting.end(), value.begin());
+}
+inline bool Exists(const string& value, const string& sub) {
+  if (sub.size() > value.size()) return false;
+  return value.find(sub) != std::string::npos;
+}
 int _GetNumCuts(int num_devices) {
   CHECK_GT(num_devices, 1) << "Must have more than two devices.";
   int num_cut = 0;
@@ -681,6 +689,7 @@ void ManualTiling::ChooseSchemeRequests() {
                                      in_schemes[j],
                                      reg,
                                      align.input_schemes[j]);
+        //LOG(INFO) << "\t(in coversion) cost=" << cost;
       }
       // Output conversion.
       for (size_t j = 0; j < node->num_outputs(); ++j) {
@@ -689,13 +698,15 @@ void ManualTiling::ChooseSchemeRequests() {
                                      align.output_schemes[j],
                                      reg,
                                      out_schemes[j]);
+        //LOG(INFO) << "\t(ou coversion) cost=" << cost;
       }
       if (cost < best_cost) {
         best_cost = cost;
         chosen = i;
       }
     }
-    LOG(INFO) << "Node #" << nodeid << " " << node->attrs.name << " choose " << chosen;
+    LOG(INFO) << "Node #" << nodeid << " " << node->attrs.name <<
+      " choose " << chosen << " cost=" << best_cost;
     chosen_scheme_requests_[nodeid] = vector<size_t>(num_cuts_, chosen);
     total_cost += best_cost;
   }
@@ -722,7 +733,7 @@ DataParallelism::DataParallelism(Graph* src, const NodeEntryGroups& groups, size
   entry_schemes_.resize(idxgraph.num_node_entries(), &other_schemes_);
   for (uint32_t nodeid = 0; nodeid < idxgraph.num_nodes(); ++nodeid) {
     const Node* node = idxgraph[nodeid].source;
-    if (node->is_variable() && EndsWith(node->attrs.name, "_weight")) {
+    if (node->is_variable() && EndsWith(node->attrs.name, "weight")) {
       const uint32_t entid = idxgraph.entry_id(nodeid, 0);
       const uint32_t ent_gid = entry_groups_.group_id(entid);
       for (const uint32_t id : entry_groups_[ent_gid]) {
@@ -765,15 +776,17 @@ ModelParallelism::ModelParallelism(Graph* src, const NodeEntryGroups& groups, si
   for (uint32_t nodeid = 0; nodeid < idxgraph.num_nodes(); ++nodeid) {
     const Node* node = idxgraph[nodeid].source;
     if (node->is_variable()) {
-      if (EndsWith(node->attrs.name, "_weight")) {
+      if (EndsWith(node->attrs.name, "weight")) {
         const uint32_t entid = idxgraph.entry_id(nodeid, 0);
         const uint32_t ent_gid = entry_groups_.group_id(entid);
         for (const uint32_t id : entry_groups_[ent_gid]) {
           LOG(INFO) << "Find parameter entry: #" << id;
           entry_schemes_[id] = &param_schemes_;
         }
+      } else {
+        // Other variables do not have scheme.
       }
-    } else if (!EndsWith(node->attrs.name, "_backward")) {
+    } else if (!EndsWith(node->attrs.name, "backward")) {
       CHECK_EQ(node->num_outputs(), 1);
       const uint32_t entid = idxgraph.entry_id(nodeid, 0);
       const uint32_t ent_gid = entry_groups_.group_id(entid);
@@ -805,6 +818,78 @@ const std::vector<Scheme>& ModelParallelism::GetEntrySchemes(uint32_t entry_id) 
   return *entry_schemes_[entry_id];
 }
 
+
+HybridParallelism::HybridParallelism(Graph* src, const NodeEntryGroups& groups, size_t num_devices):
+  ManualTiling(src, groups, num_devices) {
+  dp_param_schemes_ = vector<Scheme>(num_cuts_, Scheme::Rep());
+  dp_other_schemes_ = vector<Scheme>(num_cuts_, Scheme::Cut(0));
+  mp_param_schemes_ = vector<Scheme>(num_cuts_, Scheme::Cut(1));
+  mp_activation_schemes_ = vector<Scheme>(num_cuts_, Scheme::Cut(1));
+  mp_other_schemes_ = vector<Scheme>(num_cuts_, Scheme::Rep());
+  // TODO (minjie): bias, batch_norm, etc.
+  // TODO (minjie): _plus, _sum_grad, etc.
+  const IndexedGraph& idxgraph = src_graph_->indexed_graph();
+  entry_schemes_.resize(idxgraph.num_node_entries(), &dp_other_schemes_);
+  for (uint32_t nodeid = 0; nodeid < idxgraph.num_nodes(); ++nodeid) {
+    const Node* node = idxgraph[nodeid].source;
+    if (node->is_variable()) {
+      if (EndsWith(node->attrs.name, "weight")) {
+        vector<Scheme>* param_schemes = nullptr;
+        if (Exists(node->attrs.name, "&mp&")) {
+          LOG(INFO) << "Find mp parameter node: " << node->attrs.name;
+          param_schemes = &mp_param_schemes_;
+        } else {
+          LOG(INFO) << "Find dp parameter node: " << node->attrs.name;
+          param_schemes = &dp_param_schemes_;
+        }
+        const uint32_t entid = idxgraph.entry_id(nodeid, 0);
+        const uint32_t ent_gid = entry_groups_.group_id(entid);
+        for (const uint32_t id : entry_groups_[ent_gid]) {
+          entry_schemes_[id] = param_schemes;
+        }
+      } else {
+        // Other variables do not have schemes.
+      }
+    } else if (Exists(node->attrs.name, "&mp&")) {
+      if (!EndsWith(node->attrs.name, "backward")) {
+        CHECK_EQ(node->num_outputs(), 1);
+        const uint32_t entid = idxgraph.entry_id(nodeid, 0);
+        const uint32_t ent_gid = entry_groups_.group_id(entid);
+        for (const uint32_t id : entry_groups_[ent_gid]) {
+          LOG(INFO) << "Find MP activation entry: #" << id << " " << node->attrs.name;
+          entry_schemes_[id] = &mp_activation_schemes_;
+        }
+      } else {
+        for (size_t i = 0; i < node->num_outputs(); ++i) {
+          const uint32_t eid = idxgraph.entry_id(nodeid, i);
+          for (const uint32_t id : entry_groups_[entry_groups_.group_id(eid)]) {
+            LOG(INFO) << "Find other MP entry: #" << id << "" << node->attrs.name;
+          entry_schemes_[id] = &mp_other_schemes_;
+          }
+        }
+      }
+    }
+  }
+
+  this->ChooseSchemeRequests();
+
+  for (uint32_t nodeid = 0; nodeid < idxgraph.num_nodes(); ++nodeid) {
+    const Node* node = idxgraph[nodeid].source;
+    if (node->is_variable()) continue;
+    if (node->op()->name == "FullyConnected") { // mp
+      chosen_scheme_requests_[nodeid] = std::vector<size_t>(num_cuts_, 2);
+    } else if (node->op()->name == "Convolution") { // dp
+      chosen_scheme_requests_[nodeid] = std::vector<size_t>(num_cuts_, 0);
+    } else if (node->op()->name == "_backward_FullyConnected") { // mp
+      chosen_scheme_requests_[nodeid] = std::vector<size_t>(num_cuts_, 1);
+    } else if (node->op()->name == "_backward_Convolution") { // dp
+      chosen_scheme_requests_[nodeid] = std::vector<size_t>(num_cuts_, 2);
+    }
+    LOG(INFO) << "Overwrite Node #" << nodeid << " " << node->attrs.name
+      << " to choose " << chosen_scheme_requests_[nodeid][0];
+  }
+}
+
 struct SpartanNode {
   uint32_t node_id;
   cost_t cost;
@@ -815,9 +900,39 @@ struct SpartanNodeCmp {
     return sn1.cost < sn2.cost;
   }
 };
+  
+void SpartanTiling::InitSchemeRequests() {
+  const auto& idxgraph = graph_->indexed_graph();
+  const OpMap<FAlignedSchemes>& align_map =
+    Op::GetAttr<FAlignedSchemes>("FAlignedSchemes");
+  const ShapeVector& shapes =
+    graph_->GetAttr<ShapeVector>("shape");
+  scheme_requests_.resize(idxgraph.num_nodes());
+  for (uint32_t nodeid = 0; nodeid < idxgraph.num_nodes(); ++nodeid) {
+    const Node* node = idxgraph[nodeid].source;
+    if (node->is_variable()) {
+      continue;
+    }
+    vector<TShape> in_shapes(node->inputs.size());
+    vector<TShape> out_shapes(node->num_outputs());
+    for (size_t i = 0; i < node->inputs.size(); ++i) {
+      const uint32_t in_ent_id = idxgraph.entry_id(node->inputs[i]);
+      // TODO only pick the first scheme.
+      in_shapes[i] = shapes[in_ent_id];
+    }
+    for (size_t i = 0; i < node->num_outputs(); ++i) {
+      const uint32_t out_ent_id = idxgraph.entry_id(nodeid, i);
+      // TODO only pick the first scheme.
+      out_shapes[i] = shapes[out_ent_id];
+    }
+    // Get aligned scheme request.
+    CHECK_NOTNULL(node->op());
+    FAlignedSchemes align_func = align_map[node->op()];
+    scheme_requests_[nodeid] = align_func(node->attrs, in_shapes, out_shapes);
+  }
+}
 
 void SpartanTiling::Run() {
-  // TODO
   const ShapeVector& shapes = graph_->GetAttr<ShapeVector>("shape");
   const auto& idx = graph_->indexed_graph();
   typedef priority_queue<SpartanNode, vector<SpartanNode>, SpartanNodeCmp> SpartanQueue;
@@ -845,8 +960,10 @@ void SpartanTiling::Run() {
       entry2nodes[out_eid].push_back(node);
     }
     node_costs[nid] = cost;
+    LOG(INFO) << "Node#" << nid << ": " << node->attrs.name << " cost=" << cost;
     queue.push(SpartanNode{nid, cost});
   }
+  vector<bool> entry_visited(idx.num_node_entries(), false);
   while (!queue.empty()) {
     const SpartanNode& current = queue.top();
     queue.pop();
@@ -861,11 +978,15 @@ void SpartanTiling::Run() {
     unordered_set<uint32_t> adjusted;
     for (const NodeEntry& in_ent : node->inputs) {
       const uint32_t in_eid = idx.entry_id(in_ent);
+      if (entry_visited[in_eid]) {
+        continue;
+      }
       const cost_t delta = shapes[in_eid].Size();
       for (uint32_t eid : groups_[groups_.group_id(in_eid)]) {
+        entry_visited[eid] = true;
         for (const Node* tn : entry2nodes[eid]) {
           const uint32_t tnid = idx.node_id(tn);
-          CHECK_GT(node_costs[tnid], delta);
+          CHECK_GE(node_costs[tnid], delta);
           node_costs[tnid] -= delta;
           adjusted.insert(tnid);
         }
@@ -873,11 +994,15 @@ void SpartanTiling::Run() {
     }
     for (size_t i = 0; i < node->num_outputs(); ++i) {
       const uint32_t out_eid = idx.entry_id(nid, i);
+      if (entry_visited[out_eid]) {
+        continue;
+      }
       const cost_t delta = shapes[out_eid].Size();
       for (uint32_t eid : groups_[groups_.group_id(out_eid)]) {
+        entry_visited[eid] = true;
         for (const Node* tn : entry2nodes[eid]) {
           const uint32_t tnid = idx.node_id(tn);
-          CHECK_GT(node_costs[tnid], delta);
+          CHECK_GE(node_costs[tnid], delta);
           node_costs[tnid] -= delta;
           adjusted.insert(tnid);
         }
@@ -894,6 +1019,7 @@ void SpartanTiling::Run() {
 
 void SpartanTiling::Decide(uint32_t nid) {
   const auto& idx = graph_->indexed_graph();
+  const ShapeVector& shapes = graph_->GetAttr<ShapeVector>("shape");
   const string& node_name = idx[nid].source->attrs.name;
   LOG(INFO) << "Decide node#" << nid << ": " << node_name;
 }

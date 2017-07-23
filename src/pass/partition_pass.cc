@@ -112,16 +112,16 @@ Graph PartitionPass(Graph src) {
   NodeEntryGroups groups(graph.num_node_entries(), equal);
 
   // Call BFS.
-  BFS lvls(&src, &groups);
-  lvls.Run(start_node_id);
-  lvls.Print();
-  // TODO(minjie): chaos ownership
-  //NeuralLevels lvls(&src, &groups);
-  //lvls.Run();
+  //BFS lvls(&src, &groups);
+  //lvls.Run(start_node_id);
   //lvls.Print();
+  // TODO(minjie): chaos ownership
+  NeuralLevels lvls(&src, &groups);
+  lvls.Run();
+  lvls.Print();
 
-  SpartanTiling spartan(&src, groups);
-  spartan.Run();
+  //SpartanTiling spartan(&src, groups);
+  //spartan.Run();
 
   Tiling* tiling = nullptr;
   if (tiling_type == "kcuts") {
@@ -144,6 +144,9 @@ Graph PartitionPass(Graph src) {
   } else if (tiling_type == "modelpar") {
     // Model parallelism
     tiling = new ModelParallelism(&src, groups, num_devices);
+  } else if (tiling_type == "hybridpar") {
+    // Hybrid parallelism
+    tiling = new HybridParallelism(&src, groups, num_devices);
   }
 
   // Graph partitioner.

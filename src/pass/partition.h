@@ -326,6 +326,23 @@ class ModelParallelism : public ManualTiling {
   std::vector<std::vector<Scheme>*> entry_schemes_;
 };
 
+class HybridParallelism : public ManualTiling {
+ public:
+  HybridParallelism(Graph* src, const NodeEntryGroups& groups, size_t num_devices);
+  const std::vector<Scheme>& GetEntrySchemes(uint32_t entry_id) const override {
+    return *entry_schemes_[entry_id];
+  }
+
+ private:
+  std::vector<Scheme> dp_param_schemes_;
+  std::vector<Scheme> dp_other_schemes_;
+  std::vector<Scheme> mp_param_schemes_;
+  std::vector<Scheme> mp_activation_schemes_;
+  std::vector<Scheme> mp_other_schemes_;
+  std::vector<std::vector<Scheme>*> entry_schemes_;
+};
+
+
 class SpartanTiling : public Tiling {
  public:
   SpartanTiling(Graph* graph, const NodeEntryGroups& groups)
@@ -334,6 +351,7 @@ class SpartanTiling : public Tiling {
     entry_schemes_.resize(idx.num_node_entries());
     scheme_requests_.resize(idx.num_nodes());
     chosen_scheme_requests_.resize(idx.num_nodes());
+    InitSchemeRequests();
   }
 
   void Run();
@@ -352,6 +370,7 @@ class SpartanTiling : public Tiling {
   }
 
  private:
+  void InitSchemeRequests();
   void Decide(uint32_t nid);
 
   Graph* graph_;
