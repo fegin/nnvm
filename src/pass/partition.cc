@@ -5,6 +5,8 @@
  */
 
 #include "./partition.h"
+
+#include <queue>
 #include <nnvm/symbolic.h>
 
 using namespace std;
@@ -604,7 +606,6 @@ ManualTiling::ManualTiling(Graph* src, const NodeEntryGroups& groups, size_t num
 }
 
 void ManualTiling::ChooseSchemeRequests() {
-  // TODO
   const IndexedGraph& idxgraph = src_graph_->indexed_graph();
   const OpMap<FAlignedSchemes>& align_map =
     Op::GetAttr<FAlignedSchemes>("FAlignedSchemes");
@@ -776,6 +777,93 @@ ModelParallelism::ModelParallelism(Graph* src, const NodeEntryGroups& groups, si
 
 const std::vector<Scheme>& ModelParallelism::GetEntrySchemes(uint32_t entry_id) const {
   return *entry_schemes_[entry_id];
+}
+
+struct SpartanNode {
+  uint32_t node_id;
+  cost_t cost;
+};
+
+struct SpartanNodeCmp {
+  bool operator() (const SpartanNode& sn1, const SpartanNode& sn2) const {
+    return sn1.cost < sn2.cost;
+  }
+};
+
+void SpartanTiling::Run() {
+  // TODO
+  const ShapeVector& shapes = graph_->GetAttr<ShapeVector>("shape");
+  const auto& idx = graph_->indexed_graph();
+  typedef priority_queue<SpartanNode, vector<SpartanNode>, SpartanNodeCmp> SpartanQueue;
+  SpartanQueue queue;
+  vector<cost_t> node_costs(idx.num_nodes(), 0);
+  vector<vector<vector<const Node*>>> output_nodes(idx.num_nodes());
+  vector<bool> visited(idx.num_nodes(), false);
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    const Node* node = idx[nid].source;
+    if (node->is_variable()) {
+      visited[nid] = true;
+      continue;
+    }
+    cost_t cost = 0;
+    for (const NodeEntry& in_ent : node->inputs) {
+      const TShape& in_shape = shapes[idx.entry_id(in_ent)];
+      cost += in_shape.Size();
+      const uint32_t in_nid = idx.node_id(in_ent.node.get());
+      CHECK_GT(output_nodes[in_nid].size(), 0);
+      output_nodes[in_nid][in_ent.index].push_back(node);
+    }
+    for (size_t i = 0; i < node->num_outputs(); ++i) {
+      const TShape& out_shape = shapes[idx.entry_id(nid, i)];
+      cost += out_shape.Size();
+    }
+    output_nodes[nid].resize(node->num_outputs());
+    node_costs[nid] = cost;
+    queue.push(SpartanNode{nid, cost});
+  }
+  while (!queue.empty()) {
+    const SpartanNode& current = queue.top();
+    queue.pop();
+    const uint32_t nid = current.node_id;
+    const Node* node = idx[nid].source;
+    if (visited[nid]) {
+      continue;
+    }
+    visited[nid] = true;
+    Decide(nid);
+    // Adjust the priority of the adjacent nodes.
+    for (const NodeEntry& in_ent : node->inputs) {
+      const uint32_t in_nid = idx.node_id(in_ent.node.get());
+      const TShape& in_shape = shapes[idx.entry_id(in_ent)];
+      CHECK_GT(node_costs[in_nid], in_shape.Size());
+      node_costs[in_nid] -= in_shape.Size();
+    }
+    for (size_t i = 0; i < node->num_outputs(); ++i) {
+      const TShape& out_shape = shapes[idx.entry_id(nid, i)];
+      for (const Node* out_node : output_nodes[nid][i]) {
+        const uint32_t out_nid = idx.node_id(out_node);
+        CHECK_GT(node_costs[out_nid], out_shape.Size());
+        node_costs[out_nid] -= out_shape.Size();
+      }
+    }
+    // Push adjacent nodes back to the queue with new priority.
+    for (const NodeEntry& in_ent : node->inputs) {
+      const uint32_t in_nid = idx.node_id(in_ent.node.get());
+      queue.push(SpartanNode{in_nid, node_costs[in_nid]});
+    }
+    for (size_t i = 0; i < node->num_outputs(); ++i) {
+      for (const Node* out_node : output_nodes[nid][i]) {
+        const uint32_t out_nid = idx.node_id(out_node);
+        queue.push(SpartanNode{out_nid, node_costs[out_nid]});
+      }
+    }
+  }
+}
+
+void SpartanTiling::Decide(uint32_t nid) {
+  const auto& idx = graph_->indexed_graph();
+  const string& node_name = idx[nid].source->attrs.name;
+  LOG(INFO) << "Decide node#" << nid << ": " << node_name;
 }
 
 CutAlgorithm::CutAlgorithm(Graph* src, const Levels& levels,
