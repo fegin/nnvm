@@ -97,6 +97,9 @@ Graph PartitionPass(Graph src) {
   nnlvls.Run();
   nnlvls.Print();
 
+  SpartanTiling spartan(&src, groups);
+  spartan.Run();
+
   Tiling* tiling = nullptr;
   if (tiling_type == "kcuts") {
     // Cut algorithm.
