@@ -326,6 +326,41 @@ class ModelParallelism : public ManualTiling {
   std::vector<std::vector<Scheme>*> entry_schemes_;
 };
 
+class SpartanTiling : public Tiling {
+ public:
+  SpartanTiling(Graph* graph, const NodeEntryGroups& groups)
+    : graph_(graph), groups_(groups) {
+    const auto& idx = graph->indexed_graph();
+    entry_schemes_.resize(idx.num_node_entries());
+    scheme_requests_.resize(idx.num_nodes());
+    chosen_scheme_requests_.resize(idx.num_nodes());
+  }
+
+  void Run();
+
+  // Get schemes of a node entry.
+  const std::vector<Scheme>& GetEntrySchemes(uint32_t entry_id) const override {
+    return entry_schemes_[entry_id];
+  }
+  // Get scheme requests of the given node.
+  const std::vector<SchemeRequest>& GetSchemeRequests(uint32_t node_id) const override {
+    return scheme_requests_[node_id];
+  }
+  // Get scheme requests chosen for the given node.
+  const std::vector<size_t>& GetChosenSchemeRequests(uint32_t node_id) const override {
+    return chosen_scheme_requests_[node_id];
+  }
+
+ private:
+  void Decide(uint32_t nid);
+
+  Graph* graph_;
+  const NodeEntryGroups& groups_;
+  std::vector<std::vector<Scheme>> entry_schemes_;
+  std::vector<std::vector<SchemeRequest>> scheme_requests_;
+  std::vector<std::vector<size_t>> chosen_scheme_requests_;
+};
+
 class CutAlgorithm : public Tiling {
  public:
   // Constructor.
