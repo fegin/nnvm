@@ -823,7 +823,7 @@ void SpartanTiling::Run() {
   typedef priority_queue<SpartanNode, vector<SpartanNode>, SpartanNodeCmp> SpartanQueue;
   SpartanQueue queue;
   vector<cost_t> node_costs(idx.num_nodes(), 0);
-  vector<vector<vector<const Node*>>> output_nodes(idx.num_nodes());
+  vector<vector<const Node*>> entry2nodes(idx.num_node_entries());
   vector<bool> visited(idx.num_nodes(), false);
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     const Node* node = idx[nid].source;
@@ -833,17 +833,17 @@ void SpartanTiling::Run() {
     }
     cost_t cost = 0;
     for (const NodeEntry& in_ent : node->inputs) {
-      const TShape& in_shape = shapes[idx.entry_id(in_ent)];
+      const uint32_t in_eid = idx.entry_id(in_ent);
+      const TShape& in_shape = shapes[in_eid];
       cost += in_shape.Size();
-      const uint32_t in_nid = idx.node_id(in_ent.node.get());
-      CHECK_GT(output_nodes[in_nid].size(), 0);
-      output_nodes[in_nid][in_ent.index].push_back(node);
+      entry2nodes[in_eid].push_back(node);
     }
     for (size_t i = 0; i < node->num_outputs(); ++i) {
-      const TShape& out_shape = shapes[idx.entry_id(nid, i)];
+      const uint32_t out_eid = idx.entry_id(nid, i);
+      const TShape& out_shape = shapes[out_eid];
       cost += out_shape.Size();
+      entry2nodes[out_eid].push_back(node);
     }
-    output_nodes[nid].resize(node->num_outputs());
     node_costs[nid] = cost;
     queue.push(SpartanNode{nid, cost});
   }
@@ -858,29 +858,35 @@ void SpartanTiling::Run() {
     visited[nid] = true;
     Decide(nid);
     // Adjust the priority of the adjacent nodes.
+    unordered_set<uint32_t> adjusted;
     for (const NodeEntry& in_ent : node->inputs) {
-      const uint32_t in_nid = idx.node_id(in_ent.node.get());
-      const TShape& in_shape = shapes[idx.entry_id(in_ent)];
-      CHECK_GT(node_costs[in_nid], in_shape.Size());
-      node_costs[in_nid] -= in_shape.Size();
+      const uint32_t in_eid = idx.entry_id(in_ent);
+      const cost_t delta = shapes[in_eid].Size();
+      for (uint32_t eid : groups_[groups_.group_id(in_eid)]) {
+        for (const Node* tn : entry2nodes[eid]) {
+          const uint32_t tnid = idx.node_id(tn);
+          CHECK_GT(node_costs[tnid], delta);
+          node_costs[tnid] -= delta;
+          adjusted.insert(tnid);
+        }
+      }
     }
     for (size_t i = 0; i < node->num_outputs(); ++i) {
-      const TShape& out_shape = shapes[idx.entry_id(nid, i)];
-      for (const Node* out_node : output_nodes[nid][i]) {
-        const uint32_t out_nid = idx.node_id(out_node);
-        CHECK_GT(node_costs[out_nid], out_shape.Size());
-        node_costs[out_nid] -= out_shape.Size();
+      const uint32_t out_eid = idx.entry_id(nid, i);
+      const cost_t delta = shapes[out_eid].Size();
+      for (uint32_t eid : groups_[groups_.group_id(out_eid)]) {
+        for (const Node* tn : entry2nodes[eid]) {
+          const uint32_t tnid = idx.node_id(tn);
+          CHECK_GT(node_costs[tnid], delta);
+          node_costs[tnid] -= delta;
+          adjusted.insert(tnid);
+        }
       }
     }
     // Push adjacent nodes back to the queue with new priority.
-    for (const NodeEntry& in_ent : node->inputs) {
-      const uint32_t in_nid = idx.node_id(in_ent.node.get());
-      queue.push(SpartanNode{in_nid, node_costs[in_nid]});
-    }
-    for (size_t i = 0; i < node->num_outputs(); ++i) {
-      for (const Node* out_node : output_nodes[nid][i]) {
-        const uint32_t out_nid = idx.node_id(out_node);
-        queue.push(SpartanNode{out_nid, node_costs[out_nid]});
+    for (uint32_t anid : adjusted) {
+      if (!visited[anid]) {
+        queue.push(SpartanNode{anid, node_costs[anid]});
       }
     }
   }
