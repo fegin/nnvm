@@ -345,14 +345,7 @@ class HybridParallelism : public ManualTiling {
 
 class SpartanTiling : public Tiling {
  public:
-  SpartanTiling(Graph* graph, const NodeEntryGroups& groups)
-    : graph_(graph), groups_(groups) {
-    const auto& idx = graph->indexed_graph();
-    entry_schemes_.resize(idx.num_node_entries());
-    scheme_requests_.resize(idx.num_nodes());
-    chosen_scheme_requests_.resize(idx.num_nodes());
-    InitSchemeRequests();
-  }
+  SpartanTiling(Graph* graph, const NodeEntryGroups& groups, size_t num_devices);
 
   void Run();
 
@@ -371,10 +364,13 @@ class SpartanTiling : public Tiling {
 
  private:
   void InitSchemeRequests();
-  void Decide(uint32_t nid);
+  cost_t Decide(uint32_t nid);
 
   Graph* graph_;
   const NodeEntryGroups& groups_;
+  const size_t num_devices_;
+  const size_t num_cuts_;
+
   std::vector<std::vector<Scheme>> entry_schemes_;
   std::vector<std::vector<SchemeRequest>> scheme_requests_;
   std::vector<std::vector<size_t>> chosen_scheme_requests_;

@@ -634,8 +634,9 @@ cost_t Region::ConvertCost2(const Region& r1, const Scheme& sch1,
 }
 
 ManualTiling::ManualTiling(Graph* src, const NodeEntryGroups& groups, size_t num_devices):
-  src_graph_(src), num_devices_(num_devices),
+  src_graph_(src),
   entry_groups_(groups),
+  num_devices_(num_devices),
   num_cuts_(_GetNumCuts(num_devices)) {
 }
 
@@ -900,6 +901,18 @@ struct SpartanNodeCmp {
     return sn1.cost < sn2.cost;
   }
 };
+
+
+SpartanTiling::SpartanTiling(Graph* graph, const NodeEntryGroups& groups, size_t num_devices)
+  : graph_(graph), groups_(groups),
+    num_devices_(num_devices), num_cuts_(_GetNumCuts(num_devices)) {
+  const auto& idx = graph->indexed_graph();
+  entry_schemes_.resize(idx.num_node_entries());
+  scheme_requests_.resize(idx.num_nodes());
+  chosen_scheme_requests_.resize(idx.num_nodes());
+  InitSchemeRequests();
+}
+
   
 void SpartanTiling::InitSchemeRequests() {
   const auto& idxgraph = graph_->indexed_graph();
@@ -964,6 +977,7 @@ void SpartanTiling::Run() {
     queue.push(SpartanNode{nid, cost});
   }
   vector<bool> entry_visited(idx.num_node_entries(), false);
+  cost_t total_cost = 0;
   while (!queue.empty()) {
     const SpartanNode& current = queue.top();
     queue.pop();
@@ -973,7 +987,7 @@ void SpartanTiling::Run() {
       continue;
     }
     visited[nid] = true;
-    Decide(nid);
+    total_cost += Decide(nid);
     // Adjust the priority of the adjacent nodes.
     unordered_set<uint32_t> adjusted;
     for (const NodeEntry& in_ent : node->inputs) {
@@ -1015,13 +1029,130 @@ void SpartanTiling::Run() {
       }
     }
   }
+  LOG(INFO) << "Estimated communication cost (2 nodes): " << total_cost;
 }
 
-void SpartanTiling::Decide(uint32_t nid) {
+cost_t SpartanTiling::Decide(uint32_t nid) {
   const auto& idx = graph_->indexed_graph();
   const ShapeVector& shapes = graph_->GetAttr<ShapeVector>("shape");
-  const string& node_name = idx[nid].source->attrs.name;
-  LOG(INFO) << "Decide node#" << nid << ": " << node_name;
+  const Node* node = idx[nid].source;
+  if (node->is_variable()) {
+    return 0;
+  }
+  // Choose inputs/outputs schemes and shapes.
+  vector<TShape> in_shapes(node->inputs.size());
+  vector<TShape> out_shapes(node->num_outputs());
+  for (size_t i = 0; i < node->inputs.size(); ++i) {
+    const uint32_t in_ent_id = idx.entry_id(node->inputs[i]);
+    in_shapes[i] = shapes[in_ent_id];
+  }
+  for (size_t i = 0; i < node->num_outputs(); ++i) {
+    const uint32_t out_ent_id = idx.entry_id(nid, i);
+    out_shapes[i] = shapes[out_ent_id];
+  }
+
+  // Get aligned scheme request.
+  const auto& sch_reqs = this->GetSchemeRequests(nid);
+
+  // Choose best aligned scheme.
+  cost_t best_cost = std::numeric_limits<cost_t>::max();
+  vector<size_t> chosen;
+  for (size_t i = 0; i < sch_reqs.size(); ++i) {
+    cost_t cost = 0;
+    const auto& align = sch_reqs[i];
+    // Input conversion.
+    for (size_t j = 0; j < node->inputs.size(); ++j) {
+      const uint32_t in_entid = idx.entry_id(node->inputs[j]);
+      const vector<Scheme>& in_sch = entry_schemes_[in_entid];
+      if (in_sch.empty()) {
+        // The entry has no scheme, so there is no conversion.
+        continue;
+      }
+      // TODO: only pick the first scheme.
+      Region reg(in_shapes[j]);
+      cost += Region::ConvertCost2(reg,
+                                   in_sch[0],
+                                   reg,
+                                   align.input_schemes[j]);
+      //LOG(INFO) << "\t(in coversion) cost=" << cost;
+    }
+    // Output conversion.
+    for (size_t j = 0; j < node->num_outputs(); ++j) {
+      const uint32_t out_entid = idx.entry_id(nid, j);
+      const vector<Scheme>& out_sch = entry_schemes_[out_entid];
+      if (out_sch.empty()) {
+        // The entry has no scheme, so there is no conversion.
+        continue;
+      }
+      // TODO: only pick the first scheme.
+      Region reg(out_shapes[j]);
+      cost += Region::ConvertCost2(reg,
+                                   align.output_schemes[j],
+                                   reg,
+                                   out_sch[0]);
+      //LOG(INFO) << "\t(ou coversion) cost=" << cost;
+    }
+    if (cost < best_cost) {
+      best_cost = cost;
+      chosen = {i};
+    } else if (cost == best_cost) {
+      chosen.push_back(i);
+    }
+  }
+
+  // Select from the best.
+  size_t final_chosen = chosen[0];
+  if (chosen.size() > 0) {
+    // Make sure the chosen one replicates the smallest tensor.
+    cost_t min_replicate_cost = std::numeric_limits<cost_t>::max();
+    for (size_t chose : chosen) {
+      cost_t replicate_cost = 0;
+      const auto& align = sch_reqs[chose];
+      for (size_t j = 0; j < node->inputs.size(); ++j) {
+        const Scheme& sch = align.input_schemes[j];
+        if (sch.type == Scheme::kRep) {
+          replicate_cost += in_shapes[j].Size();
+        }
+      }
+      for (size_t j = 0; j < node->num_outputs(); ++j) {
+        const Scheme& sch = align.output_schemes[j];
+        if (sch.type == Scheme::kRed) {
+          replicate_cost += out_shapes[j].Size();
+        }
+      }
+      if (replicate_cost < min_replicate_cost) {
+        min_replicate_cost = replicate_cost;
+        final_chosen = chose;
+      }
+    }
+  }
+
+  // Fix the entry schemes of the best one.
+  const auto& final_align = sch_reqs[final_chosen];
+  for (size_t j = 0; j < node->inputs.size(); ++j) {
+    const uint32_t in_eid = idx.entry_id(node->inputs[j]);
+    if (entry_schemes_[in_eid].empty()) {
+      const Scheme& sch = final_align.input_schemes[j];
+      entry_schemes_[in_eid] = vector<Scheme>(num_cuts_, sch);
+    }
+  }
+  for (size_t j = 0; j < node->num_outputs(); ++j) {
+    const uint32_t out_eid = idx.entry_id(nid, j);
+    if (entry_schemes_[out_eid].empty()) {
+      const Scheme& sch = final_align.output_schemes[j];
+      if (sch.type == Scheme::kRed) {
+        entry_schemes_[out_eid] = vector<Scheme>(num_cuts_, Scheme::Rep());
+      } else {
+        entry_schemes_[out_eid] = vector<Scheme>(num_cuts_, sch);
+      }
+    }
+  }
+
+  // Save the choice.
+  LOG(INFO) << "Node #" << nid << " " << node->attrs.name <<
+    " choose " << final_chosen << " cost=" << best_cost;
+  chosen_scheme_requests_[nid] = vector<size_t>(num_cuts_, final_chosen);
+  return best_cost;
 }
 
 CutAlgorithm::CutAlgorithm(Graph* src, const Levels& levels,

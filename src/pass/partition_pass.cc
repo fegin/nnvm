@@ -120,9 +120,6 @@ Graph PartitionPass(Graph src) {
   lvls.Run();
   lvls.Print();
 
-  //SpartanTiling spartan(&src, groups);
-  //spartan.Run();
-
   Tiling* tiling = nullptr;
   if (tiling_type == "kcuts") {
     // Cut algorithm.
@@ -147,6 +144,10 @@ Graph PartitionPass(Graph src) {
   } else if (tiling_type == "hybridpar") {
     // Hybrid parallelism
     tiling = new HybridParallelism(&src, groups, num_devices);
+  } else if (tiling_type == "spartan") {
+    SpartanTiling* spartan = new SpartanTiling(&src, groups, num_devices);
+    spartan->Run();
+    tiling = spartan;
   }
 
   // Graph partitioner.
