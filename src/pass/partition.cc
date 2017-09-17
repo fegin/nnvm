@@ -1659,7 +1659,7 @@ void GraphPartitioner::AllReduceBlocks(
   vector<vector<NodeEntry>> splitted(inputs.size());
   // TODO(minjie): The split here should be a FlattenAndSplit because we
   // in fact don't care about the shape but only the length of the array.
-  CHECK_EQ(shape[0] % outputs.size(), 0);
+  CHECK_EQ(shape[0] % outputs.size(), 0) << shape[0] << " " << outputs.size();
   TShape split_shape = shape;
   split_shape[0] /= outputs.size();
   for (size_t i = 0; i < inputs.size(); ++i) {
