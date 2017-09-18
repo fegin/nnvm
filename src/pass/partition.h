@@ -82,6 +82,8 @@ class Levels {
 
   virtual bool AllowCrossLevelEdges() const = 0;
 
+  void RemoveExtraNodeLevel();
+
  protected:
   void AddNode(uint32_t levelid, uint32_t nodeid);
 
@@ -224,7 +226,7 @@ struct DPState {
   // cost of this state.
   int prev_state_index = -1;
   // Aligned request chosen for each operator in this state to get the minimal cost.
-  std::vector<size_t> chosen_aligned_requests;
+  std::vector<size_t> op_aligned_requests;
 
   explicit DPState(const std::vector<Scheme>& schemes): schemes(schemes) {}
 };

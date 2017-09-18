@@ -134,6 +134,15 @@ Graph InferAttr(Graph &&ret,
       }
     }
   }
+
+
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    const auto& inode = idx[nid];
+    for (size_t i = 0; i < inode.source->num_outputs(); ++i) {
+      const uint32_t eid = idx.entry_id(nid, i);
+      LOG(INFO) << inode.source->attrs.name << "#" << i << ": " << inferred[eid];
+    }
+  }
   // set the shapes
   ret.attrs[attr_name] = std::make_shared<any>(std::move(inferred));
   // Number of entries that could not be inferred from this pass.

@@ -66,6 +66,8 @@ Graph PartitionPass(Graph src) {
     src.GetAttr<unordered_map<uint32_t, std::vector<uint32_t>>>("backward2forward");
   const string& tiling_type = dmlc::GetEnv("TOFU_TILING_TYPE", string("kcuts"));
   const int oversharding = dmlc::GetEnv("TOFU_OVERSHARDING", 0);
+  const int use_bfs = dmlc::GetEnv("TOFU_USE_BFS_LEVEL", 0);
+
   const int num_devices = src.GetAttr<int>("num_devices");
   const int num_cuts = GetNumCuts(num_devices);
   const string& default_group = src.GetAttr<string>("default_group");
@@ -111,19 +113,24 @@ Graph PartitionPass(Graph src) {
 
   NodeEntryGroups groups(graph.num_node_entries(), equal);
 
-  // Call BFS.
-  //BFS lvls(&src, &groups);
-  //lvls.Run(start_node_id);
-  //lvls.Print();
   // TODO(minjie): chaos ownership
-  NeuralLevels lvls(&src, &groups);
-  lvls.Run();
-  lvls.Print();
+  Levels* lvls = nullptr;
+  if (use_bfs) {
+    BFS* bfslvls = new BFS(&src, &groups);
+    bfslvls->Run(start_node_id);
+    bfslvls->Print();
+    lvls = bfslvls;
+  } else {
+    NeuralLevels* nnlvls = new NeuralLevels(&src, &groups);
+    nnlvls->Run();
+    nnlvls->Print();
+    lvls = nnlvls;
+  }
 
   Tiling* tiling = nullptr;
   if (tiling_type == "kcuts") {
     // Cut algorithm.
-    CutAlgorithm* algo = new CutAlgorithm(&src, lvls, groups);
+    CutAlgorithm* algo = new CutAlgorithm(&src, *lvls, groups);
     cost_t total_cost = 0;
     total_cost = algo->KCuts(num_cuts);
     algo->Print();

@@ -279,6 +279,22 @@ void Levels::AddNodeEntry(uint32_t levelid, uint32_t entry_id) {
   }
 }
 
+void Levels::RemoveExtraNodeLevel() {
+  if (node_levels_.size() > entry_group_levels_.size()) {
+    // If the last level is a node level, it can be merged
+    // with the second last one.
+    const size_t old_size = node_levels_.size();
+    const auto& last_lvl = node_levels_[old_size - 1];
+    for (const uint32_t nid : last_lvl) {
+      const size_t level_idx = node_levels_[old_size - 2].size();
+      node_levels_[old_size - 2].push_back(nid);
+      node2index_[nid] = std::make_pair(old_size - 2, level_idx);
+    }
+    node_levels_.resize(old_size - 1);
+  }
+  CHECK_EQ(node_levels_.size(), entry_group_levels_.size());
+}
+
 BFS::BFS(Graph* src, const NodeEntryGroups* groups): Levels(groups), src_graph_(src) {
   const IndexedGraph& graph = src_graph_->indexed_graph();
   entry_to_nodes_.resize(graph.num_node_entries());
@@ -347,6 +363,7 @@ void BFS::Run(uint32_t start_node_id) {
       }
     }
   }
+  RemoveExtraNodeLevel();
 }
 
 void BFS::Print() const {
@@ -485,6 +502,7 @@ void NeuralLevels::Run() {
     }
     AddNodeEntry(entlvl, entid);
   }
+  RemoveExtraNodeLevel();
 }
 
 void NeuralLevels::Print() const {
@@ -1218,6 +1236,7 @@ CutAlgorithm::CutAlgorithm(Graph* src, const Levels& levels,
       dp_operators_[i].push_back(dpop);
     }
   }
+  CHECK_EQ(dp_operators_.size(), dp_entries_.size());
   // Init DP states.
   Init();
 }
@@ -1257,7 +1276,7 @@ void CutAlgorithm::Reset() {
   for (auto& lvl : dp_states_) {
     for (auto& state: lvl) {
       state.cost = 0;
-      state.chosen_aligned_requests.clear();
+      state.op_aligned_requests.clear();
     }
   }
 }
@@ -1273,14 +1292,14 @@ cost_t CutAlgorithm::OneCut() {
       if (IsVariable(op)) {
         // Variable operator. Any scheme should be fine, so no conversion cost.
         // Just put index 0 as the chosen aligned request.
-        state.chosen_aligned_requests.push_back(0);
+        state.op_aligned_requests.push_back(0);
         continue;
       }
       cost_t op_cost = 0;
       size_t chosen_request = 0;
       tie(op_cost, chosen_request) = ConversionCost(op, nullptr, &state, 0);
       state.cost += op_cost;
-      state.chosen_aligned_requests.push_back(chosen_request);
+      state.op_aligned_requests.push_back(chosen_request);
     }
   }
   // Do DP.
@@ -1315,7 +1334,7 @@ cost_t CutAlgorithm::OneCut() {
           // Record this.
           next_state.cost = state_cost;
           next_state.prev_state_index = k;
-          next_state.chosen_aligned_requests = std::move(op_requests);
+          next_state.op_aligned_requests = std::move(op_requests);
         }
       }
       //LOG(INFO) << "DP cost: level #" << i << " state #" << j << ": " << next_state.cost;
@@ -1412,7 +1431,7 @@ cost_t CutAlgorithm::ExtractOptimalPlan() {
   LOG(INFO) << "Min cost: " << min_cost;
   for (int i = dp_states_.size() - 1; i >= 0; --i) {
     CHECK_EQ(dp_entries_[i].size(), min_state->schemes.size());
-    CHECK_EQ(dp_operators_[i].size(), min_state->chosen_aligned_requests.size());
+    CHECK_EQ(dp_operators_[i].size(), min_state->op_aligned_requests.size());
     // Record best scheme for each entry.
     for (size_t j = 0; j < dp_entries_[i].size(); ++j) {
       dp_entries_[i][j].chosen_schemes.push_back(
@@ -1422,7 +1441,7 @@ cost_t CutAlgorithm::ExtractOptimalPlan() {
     for (size_t j = 0; j < dp_operators_[i].size(); ++j) {
       if (!IsVariable(dp_operators_[i][j])) {
         dp_operators_[i][j].chosen_aligned_requests.push_back(
-            min_state->chosen_aligned_requests[j]);
+            min_state->op_aligned_requests[j]);
       }
     }
     if (i > 0) {
@@ -1496,9 +1515,10 @@ cost_t CutAlgorithm::KCuts(uint32_t K) {
         // Therefore, no need to compute ghost regions for this.
         continue;
       }
+      CHECK(!op.chosen_aligned_requests.empty());
       size_t cur_req = op.chosen_aligned_requests[op.chosen_aligned_requests.size() - 1];
-      const SchemeRequest& req = op.aligned_requests[cur_req];
       CHECK_LT(cur_req, op.aligned_requests.size());
+      const SchemeRequest& req = op.aligned_requests[cur_req];
       // Inputs.
       for (size_t i = 0; i < op.input_ghost_regions.size(); ++i) {
         op.input_ghost_regions[i] = op.input_ghost_regions[i].Split2(
