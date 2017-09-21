@@ -184,6 +184,5 @@ NNVM_REGISTER_PASS(PartitionPass)
 .depend_op_attr("FAlignedSchemes")  // Require op to provide aligned schemes.
 .set_change_graph(true);
 
-
 }  // namespace pass
 }  // namespace nnvm
