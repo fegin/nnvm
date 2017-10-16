@@ -7,6 +7,7 @@
 #include "./partition.h"
 
 #include <queue>
+#include <dmlc/json.h>
 #include <nnvm/symbolic.h>
 
 using namespace std;
@@ -837,6 +838,87 @@ const std::vector<Scheme>& ModelParallelism::GetEntrySchemes(uint32_t entry_id) 
   return *entry_schemes_[entry_id];
 }
 
+struct JSONUserTilingNode {
+  std::string name;
+  std::vector<std::string> partitions;
+  void Save(dmlc::JSONWriter *writer) const {
+    LOG(FATAL) << "NNVM should only load a user tiling instead of saving.";
+  }
+
+  void Load(dmlc::JSONReader *reader) {
+    dmlc::JSONObjectReadHelper helper;
+    helper.DeclareField("name", &name);
+    helper.DeclareField("partitions", &partitions);
+    helper.ReadAllFields(reader);
+  }
+};
+
+struct JSONUserTiling {
+  std::vector<JSONUserTilingNode> nodes;
+  void Save(dmlc::JSONWriter *writer) const {
+    LOG(FATAL) << "NNVM should only load a user tiling instead of saving.";
+  }
+
+  void Load(dmlc::JSONReader *reader) {
+    dmlc::JSONObjectReadHelper helper;
+    helper.DeclareField("nodes", &nodes);
+    helper.ReadAllFields(reader);
+  }
+};
+
+UserTiling::UserTiling(Graph* src, const NodeEntryGroups& groups, size_t num_devices):
+  ManualTiling(src, groups, num_devices) {
+  // Load the tiling scheme from the JSON file.
+  CHECK_NE(src->attrs.count("user_tiling_json"), 0U)
+      << "Load JSON require json to be presented.";
+  const std::string &json_str = src->GetAttr<std::string>("user_tiling_json");
+  std::istringstream is(json_str);
+  dmlc::JSONReader reader(&is);
+  JSONUserTiling jutiling;
+  jutiling.Load(&reader);
+  std::map<std::string, JSONUserTilingNode> tiling_map;
+  // Partition all the node.
+  for (auto node : jutiling.nodes) {
+    tiling_map[node.name] = node;
+  }
+  const IndexedGraph& idxgraph = src_graph_->indexed_graph();
+  entry_schemes_.resize(idxgraph.num_node_entries());
+  std::cout << "UserTiling ===========================================" << std::endl;
+  for (uint32_t nodeid = 0; nodeid < idxgraph.num_nodes(); ++nodeid) {
+    const Node* node = idxgraph[nodeid].source;
+    const JSONUserTilingNode junode = tiling_map[node->attrs.name];
+    CHECK_EQ(node->num_outputs(), junode.partitions.size());
+    for (unsigned i = 0; i < node->num_outputs(); i++) {
+      std::cout << "Processing " << node->attrs.name << std::endl;
+      const uint32_t entid = idxgraph.entry_id(nodeid, i);
+      const uint32_t ent_gid = entry_groups_.group_id(entid);
+      const std::string partition = junode.partitions[i];
+      CHECK_EQ(num_cuts_, partition.size());
+      std::vector<Scheme> scheme;
+      for (auto p : partition) {
+        // TODO(fegin): Support more than two dimensions cut.
+        switch (p) {
+        case 'R':
+          scheme.push_back(Scheme::Cut(0));
+          break;
+        case 'C':
+          scheme.push_back(Scheme::Cut(1));
+          break;
+        case 'r':
+          scheme.push_back(Scheme::Rep());
+          break;
+        default:
+          LOG(FATAL) << "Not supported partition.";
+        }
+      }
+      for (const uint32_t id : entry_groups_[ent_gid]) {
+        LOG(INFO) << "Find parameter entry: #" << id;
+        entry_schemes_[id] = scheme;
+      }
+    }
+  }
+  this->ChooseSchemeRequests();
+}
 
 HybridParallelism::HybridParallelism(Graph* src, const NodeEntryGroups& groups, size_t num_devices):
   ManualTiling(src, groups, num_devices) {

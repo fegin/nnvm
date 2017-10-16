@@ -136,9 +136,25 @@ struct JSONGraph {
     writer->WriteObjectKeyValue("node_row_ptr", node_row_ptr);
     writer->WriteObjectKeyValue("heads", heads);
     if (attrs.size() != 0) {
+#if 0
       writer->WriteObjectKeyValue("attrs", attrs);
+#else
+      std::unordered_map<std::string, std::shared_ptr<any> > attrs2;
+      attrs2 = attrs;
+      for (auto it = attrs2.begin(); it != attrs2.end();) {
+        std::cout << it->first << std::endl;
+        if (it->first != "shape") {
+          it = attrs2.erase(it);
+        } else {
+          it++;
+        }
+      }
+      writer->WriteObjectKeyValue("attrs", attrs2);
+#endif
     }
+#if 0
     writer->EndObject();
+#endif
   }
 
   void Load(dmlc::JSONReader *reader) {
