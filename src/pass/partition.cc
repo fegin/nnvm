@@ -889,7 +889,7 @@ UserTiling::UserTiling(Graph* src, const NodeEntryGroups& groups, size_t num_dev
     const JSONUserTilingNode junode = tiling_map[node->attrs.name];
     CHECK_EQ(node->num_outputs(), junode.partitions.size())
         << "Node" << nodeid << ", " << node->attrs.name <<
-        ", partition size and outputs mismatched."
+        ", partition size and outputs mismatched.";
     for (unsigned i = 0; i < node->num_outputs(); i++) {
       LOG(INFO) << "UserTiling is processing " << node->attrs.name;
       const uint32_t entid = idxgraph.entry_id(nodeid, i);
