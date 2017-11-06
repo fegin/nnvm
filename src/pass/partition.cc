@@ -883,13 +883,15 @@ UserTiling::UserTiling(Graph* src, const NodeEntryGroups& groups, size_t num_dev
   }
   const IndexedGraph& idxgraph = src_graph_->indexed_graph();
   entry_schemes_.resize(idxgraph.num_node_entries());
-  std::cout << "UserTiling ===========================================" << std::endl;
+  LOG(INFO) << "UserTiling ===========================================";
   for (uint32_t nodeid = 0; nodeid < idxgraph.num_nodes(); ++nodeid) {
     const Node* node = idxgraph[nodeid].source;
     const JSONUserTilingNode junode = tiling_map[node->attrs.name];
-    CHECK_EQ(node->num_outputs(), junode.partitions.size());
+    CHECK_EQ(node->num_outputs(), junode.partitions.size())
+        << "Node" << nodeid << ", " << node->attrs.name <<
+        ", partition size and outputs mismatched."
     for (unsigned i = 0; i < node->num_outputs(); i++) {
-      std::cout << "Processing " << node->attrs.name << std::endl;
+      LOG(INFO) << "UserTiling is processing " << node->attrs.name;
       const uint32_t entid = idxgraph.entry_id(nodeid, i);
       const uint32_t ent_gid = entry_groups_.group_id(entid);
       const std::string partition = junode.partitions[i];
