@@ -85,6 +85,8 @@ struct JSONNode {
     if (control_deps.size() != 0) {
       writer->WriteObjectKeyValue("control_deps", control_deps);
     }
+    writer->WriteObjectKeyValue("num_outputs", node->num_outputs());
+    writer->WriteObjectKeyValue("num_inputs", node->num_inputs());
     writer->EndObject();
   }
 
@@ -152,9 +154,7 @@ struct JSONGraph {
       writer->WriteObjectKeyValue("attrs", attrs2);
 #endif
     }
-#if 0
     writer->EndObject();
-#endif
   }
 
   void Load(dmlc::JSONReader *reader) {
