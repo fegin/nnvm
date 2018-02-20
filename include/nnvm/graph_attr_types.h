@@ -75,6 +75,8 @@ using DeviceVector = std::vector<int>;
  */
 using DeviceAssignMap = std::unordered_map<std::string, int>;
 
+using PlacementVector = std::vector<unsigned>;
+
 /*!
  * \brief The result holder of storage id of each NodeEntry in the graph.
  *

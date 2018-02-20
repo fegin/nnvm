@@ -137,9 +137,9 @@ struct JSONGraph {
     writer->WriteObjectKeyValue("node_row_ptr", node_row_ptr);
     writer->WriteObjectKeyValue("heads", heads);
     if (attrs.size() != 0) {
-      for (auto it : attrs) {
-        std::cout << it.first << std::endl;
-      }
+      //for (auto it : attrs) {
+        //std::cout << it.first << std::endl;
+      //}
       // A hacky way to store full(fwd & bwd) dataflow graph.
       if (attrs.count("shape") > 0) {
         std::unordered_map<std::string, std::shared_ptr<any> > new_attrs;

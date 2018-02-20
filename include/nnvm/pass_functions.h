@@ -132,6 +132,15 @@ inline Graph PlaceDevice(Graph graph,
   return ApplyPass(std::move(graph), "PlaceDevice");
 }
 
+inline Graph ChangePlacement(Graph graph, uint32_t ngpus,
+                             std::string device_group_attr_key,
+                             PlacementVector placement) {
+  graph.attrs["ngpus"] = std::make_shared<any>(std::move(ngpus));
+  graph.attrs["device_group_attr_key"] = std::make_shared<any>(std::move(device_group_attr_key));
+  graph.attrs["placement"] = std::make_shared<any>(std::move(placement));
+  return ApplyPass(std::move(graph), "ChangePlacement");
+}
+
 /*!
  * \brief Get the gradient graph whose outputs are gradients of xs wrt to ys.
  * \param graph The input graph.
