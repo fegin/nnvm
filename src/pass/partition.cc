@@ -1644,7 +1644,7 @@ void GraphPartitioner::BroadcastEntries(
             CHECK(false) << "Multi-stage broadcasting is not allowed right now.";
             NodePtr copy_node = Node::Create();
             copy_node->attrs.op = copy_op;
-            copy_node->attrs.name = "__broadcast_stage" + std::to_string(stageid);
+            copy_node->attrs.name = "_TOFU[red]BCAST" + std::to_string(stageid);
             copy_node->inputs.push_back((*dev_entries)[bcast.from]);
             AssignDevice(copy_node, to);
             FinalizeNodeCreation(copy_node);
@@ -1724,7 +1724,7 @@ void GraphPartitioner::AllReduceBlocks(
             sum_node->inputs.push_back(tmp_sum[procid]);
           }
           sum_node->attrs.op = sum_op;
-          sum_node->attrs.name = "__reduce_stage" + std::to_string(stageid);
+          sum_node->attrs.name = "_TOFU[red]SUM" + std::to_string(stageid);
           sum_node->attrs.dict["num_args"] = std::to_string(red.from.size());
           AssignDevice(sum_node, red.to);
           FinalizeNodeCreation(sum_node);

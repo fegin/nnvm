@@ -183,6 +183,7 @@ Graph PlanMemory(Graph ret) {
   if (ret.attrs.count("device") != 0) {
     device_vec = &(ret.GetAttr<DeviceVector>("device"));
   }
+  CHECK(ret.attrs.count("device"));
   // the allocator.
   GraphAllocator allocator(&idx);
   // number of entries that are not statically allocated.
@@ -254,6 +255,29 @@ Graph PlanMemory(Graph ret) {
       }
     }
   }
+
+  std::map<int, std::vector<std::pair<uint32_t, std::string>>> storage2entry;
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    const Node* node = idx[nid].source;
+    for (size_t i = 0; i < node->num_outputs(); ++i) {
+      uint32_t eid = idx.entry_id(nid, i);
+      std::string name = "Entry#" + std::to_string(eid)
+        + "-" + node->attrs.name + "#" + std::to_string(i);
+      if (storage[eid] >= 0) {
+        storage2entry[storage[eid]].push_back(std::make_pair(nid, name));
+      }
+    }
+  }
+  for (const auto& kv : storage2entry) {
+    auto dev = device_vec->at(kv.second[0].first);
+    LOG(INFO) << "Storage#" << kv.first << "(dev#" << dev << "): [";
+    for (const auto& s : kv.second) {
+      CHECK(dev == device_vec->at(s.first));
+      LOG(INFO) << "\t" << s.second;
+    }
+    LOG(INFO) << "]";
+  }
+
   ret.attrs["storage_id"] = std::make_shared<any>(std::move(storage));
   ret.attrs["storage_inplace_index"] = std::make_shared<any>(std::move(storage_inplace_index));
   ret.attrs["storage_allocated_bytes"] = std::make_shared<any>(allocator.TotalAllocBytes());
