@@ -357,6 +357,7 @@ static void UpdateGraphAttributes(const struct SplitGraphInputs& in,
   }
 
   out->ret.attrs["context"] = in.src.attrs.at("context");
+  out->ret.attrs["device"] = in.src.attrs.at("device");
   out->ret.attrs["shape"] =
       std::make_shared<dmlc::any>(std::move(new_shape_vec));
   out->ret.attrs["dtype"] =

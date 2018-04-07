@@ -344,6 +344,16 @@ class HybridParallelism : public ManualTiling {
   std::vector<std::vector<Scheme>*> entry_schemes_;
 };
 
+class UserTiling : public ManualTiling {
+ public:
+  UserTiling(Graph* src, const NodeEntryGroups& groups, size_t num_devices);
+  const std::vector<Scheme>& GetEntrySchemes(uint32_t entry_id) const override {
+    return entry_schemes_[entry_id];
+  }
+
+ private:
+  std::vector<std::vector<Scheme>> entry_schemes_;
+};
 
 class SpartanTiling : public Tiling {
  public:

@@ -155,6 +155,9 @@ Graph PartitionPass(Graph src) {
     SpartanTiling* spartan = new SpartanTiling(&src, groups, num_devices);
     spartan->Run();
     tiling = spartan;
+  } else if (tiling_type == "usertiling") {
+    // User defined tiling
+    tiling = new UserTiling(&src, groups, num_devices);
   }
 
   // Graph partitioner.
@@ -181,9 +184,9 @@ NNVM_REGISTER_PASS(PartitionPass)
 .depend_graph_attr("backward2forward")  // Gradient information from GradientPass.
 .depend_graph_attr("num_devices")  // Number of devices
 .depend_graph_attr("default_group")
+.depend_graph_attr("user_tiling_json")
 .depend_op_attr("FAlignedSchemes")  // Require op to provide aligned schemes.
 .set_change_graph(true);
-
 
 }  // namespace pass
 }  // namespace nnvm
