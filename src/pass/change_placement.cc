@@ -37,6 +37,8 @@ Graph ChangePlacement(Graph src) {
   }
   // Change device_group_attr_key to the assigned GPU.
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    //std::cout << idx[nid].source->attrs.name << "\"" << nid << "\"" << ":"
+    //          << placement[nid] << std::endl;
     const auto& inode = idx[nid];
     NodePtr new_node = Node::Create();
     new_node->inputs.reserve(inode.inputs.size());
