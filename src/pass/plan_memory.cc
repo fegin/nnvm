@@ -206,10 +206,6 @@ Graph PlanMemory(Graph ret) {
   const DeviceVector& device_vec = ret.GetAttr<DeviceVector>("device");
   static auto& finplace_option = Op::GetAttr<FInplaceOption>("FInplaceOption");
 
-  if (ret.attrs.count("device") != 0) {
-    device_vec = &(ret.GetAttr<DeviceVector>("device"));
-  }
-  CHECK(ret.attrs.count("device"));
   // the allocator.
   GraphAllocator allocator(&idx, device_vec);
   // number of entries that are not statically allocated.

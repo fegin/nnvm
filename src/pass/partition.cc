@@ -1229,7 +1229,7 @@ cost_t SpartanTiling::Decide(uint32_t nid) {
     }
   }
 
-  // Fix the entry schemes of the best one.
+  // Set the entry schemes to be the best one.
   const auto& final_align = sch_reqs[final_chosen];
   for (size_t j = 0; j < node->inputs.size(); ++j) {
     const uint32_t in_eid = idx.entry_id(node->inputs[j]);
@@ -1622,6 +1622,31 @@ cost_t CutAlgorithm::KCuts(uint32_t K) {
   }
   // Compute (k-1)-cut.
   return cut_cost + 2 * KCuts(K - 1);
+}
+
+cost_t CutAlgorithm::KEqualCuts(uint32_t K) {
+  if (K == 0) {
+    return 0;
+  }
+  // Compute one-cut.
+  cost_t cut_cost = OneCut();
+  // Populate the one-cut result to all k-cuts.
+  for (size_t i = 0; i < dp_states_.size(); ++i) {
+    for (size_t j = 0; j < dp_entries_[i].size(); ++j) {
+      for (uint32_t k = 0; k < K - 1; ++k) {
+        dp_entries_[i][j].chosen_schemes.push_back(dp_entries_[i][j].chosen_schemes[0]);
+      }
+    }
+    for (size_t j = 0; j < dp_operators_[i].size(); ++j) {
+      if (!IsVariable(dp_operators_[i][j])) {
+        for (uint32_t k = 0; k < K - 1; ++k) {
+          dp_operators_[i][j].chosen_aligned_requests.push_back(
+              dp_operators_[i][j].chosen_aligned_requests[0]);
+        }
+      }
+    }
+  }
+  return cut_cost;
 }
 
 void GraphPartitioner::AssignDevice(NodePtr node, size_t device_group_id) const {

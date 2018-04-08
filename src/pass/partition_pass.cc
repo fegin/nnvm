@@ -131,8 +131,7 @@ Graph PartitionPass(Graph src) {
   if (tiling_type == "kcuts") {
     // Cut algorithm.
     CutAlgorithm* algo = new CutAlgorithm(&src, *lvls, groups);
-    cost_t total_cost = 0;
-    total_cost = algo->KCuts(num_cuts);
+    cost_t total_cost = algo->KCuts(num_cuts);
     algo->Print();
     LOG(INFO) << "Total K-cuts cost: " << total_cost;
     if (oversharding) {
@@ -142,6 +141,12 @@ Graph PartitionPass(Graph src) {
     } else {
       tiling = algo;
     }
+  } else if (tiling_type == "k-equal-cuts") {
+    CutAlgorithm* algo = new CutAlgorithm(&src, *lvls, groups);
+    cost_t total_cost = algo->KEqualCuts(num_cuts);
+    algo->Print();
+    LOG(INFO) << "One-cut cost: " << total_cost;
+    tiling = algo;
   } else if (tiling_type == "datapar") {
     // Data parallelism
     tiling = new DataParallelism(&src, groups, num_devices);

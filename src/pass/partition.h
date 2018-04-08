@@ -400,6 +400,9 @@ class CutAlgorithm : public Tiling {
   // K-cut algorithm. Return the minimal cost.
   cost_t KCuts(uint32_t K);
 
+  // Apply the same one-cut result to all K cuts. Return the one-cut cost.
+  cost_t KEqualCuts(uint32_t K);
+
   // Get schemes of a node entry.
   const std::vector<Scheme>& GetEntrySchemes(uint32_t entry_id) const override;
   
