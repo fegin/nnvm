@@ -72,6 +72,7 @@ Graph PartitionPass(Graph src) {
   const int num_cuts = GetNumCuts(num_devices);
   const string& default_group = src.GetAttr<string>("default_group");
     
+  LOG(INFO) << "Tiling type: " << tiling_type;
   LOG(INFO) << "Oversharding status=" << oversharding;
   LOG(INFO) << "Number of cuts: " << num_cuts;
 
