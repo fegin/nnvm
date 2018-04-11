@@ -241,13 +241,15 @@ inline T Graph::MoveCopyAttr(const std::string& attr_name) {
 }
 
 template <typename GNode, typename HashType,
-           typename FVisit, typename HashFunc,
-          typename InDegree, typename GetInput>
+          typename FVisit, typename HashFunc,
+          typename InDegree, typename GetInput,
+          typename IsRoot>
 void PostOrderDFSVisit(const std::vector<GNode>& heads,
                        FVisit fvisit,
                        HashFunc hash,
                        InDegree indegree,
-                       GetInput getinput) {
+                       GetInput getinput,
+                       IsRoot isroot) {
   std::vector<std::pair<GNode, uint32_t> > stack;
   std::unordered_set<HashType> visited;
   for (auto& head : heads) {
@@ -264,7 +266,7 @@ void PostOrderDFSVisit(const std::vector<GNode>& heads,
       } else {
         const GNode& input = getinput(back.first, back.second++);
         HashType input_hash = hash(input);
-        if (visited.count(input_hash) == 0) {
+        if (visited.count(input_hash) == 0 && !isroot(input)) {
           stack.push_back(std::make_pair(input, 0));
           visited.insert(input_hash);
         }
@@ -295,7 +297,35 @@ inline void DFSVisit(const std::vector<NodeEntry>& heads,
         } else {
           return &(*n)->control_deps.at(index - (*n)->inputs.size());
         }
-      });
+      },
+      [](GNode n)->bool { return false; });
+}
+
+template<typename FVisit>
+inline void DFSVisitWithRoot(const std::vector<NodeEntry>& heads,
+                             const std::unordered_set<Node*>& root,
+                             FVisit fvisit) {
+  typedef const NodePtr* GNode;
+  std::vector<GNode> head_nodes(heads.size());
+  std::transform(heads.begin(), heads.end(), head_nodes.begin(),
+                 [](const NodeEntry& e)->GNode {
+                   return &e.node;
+                 });
+  PostOrderDFSVisit<GNode, Node*>(
+      head_nodes,
+      [fvisit](GNode n) { fvisit(*n); },  // FVisit
+      [](GNode n)->Node* { return n->get(); },  // HashFunc
+      [](GNode n)->uint32_t {  // InDegree
+        return (*n)->inputs.size() + (*n)->control_deps.size();
+      },
+      [](GNode n, uint32_t index)->GNode {  // GetInput
+        if (index < (*n)->inputs.size()) {
+          return &(*n)->inputs.at(index).node;
+        } else {
+          return &(*n)->control_deps.at(index - (*n)->inputs.size());
+        }
+      },
+      [&root](GNode n)->bool { return root.count(n->get()); });
 }
 
 }  // namespace nnvm

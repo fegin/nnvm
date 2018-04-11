@@ -283,18 +283,30 @@ Graph PlanMemory(Graph ret) {
     const auto& inode = idx[nid];
     for (size_t i = 0; i < inode.source->num_outputs(); ++i) {
       uint32_t eid = idx.entry_id(nid, i);
-      LOG(INFO) << "Storage for Node#" << nid << " " << inode.source->attrs.name
-        << "#" << i << ": " << storage[eid];
+      //LOG(INFO) << "Storage for Node#" << nid << " " << inode.source->attrs.name
+        //<< "#" << i << ": " << storage[eid];
       storage2entry[storage[eid]].push_back(std::make_pair(nid, i));
     }
   }
+  size_t bad_alloc_bytes = 0, extern_alloc_bytes = 0;
   for (const auto& kv : storage2entry) {
-    LOG(INFO) << "Storage#" << kv.first << ": [";
+    //LOG(INFO) << "Storage#" << kv.first << ": [";
+    size_t size_sum = 0;
     for (const auto& e : kv.second) {
-      LOG(INFO) << "\t" << idx[e.first].source->attrs.name << "#" << e.second;
+      //LOG(INFO) << "\t" << idx[e.first].source->attrs.name << "#" << e.second;
+      const uint32_t eid = idx.entry_id(e.first, e.second);
+      size_sum += shape_vec[eid].Size();
     }
-    LOG(INFO) << "]";
+    //LOG(INFO) << "]";
+    if (kv.first == GraphAllocator::kBadStorageID) {
+      bad_alloc_bytes = size_sum * 4;
+    } else if (kv.first == GraphAllocator::kExternalStorageID) {
+      extern_alloc_bytes = size_sum * 4;
+    }
   }
+  LOG(INFO) << "Total allocated bytes: " << allocator.TotalAllocBytes();
+  LOG(INFO) << "Total bad alloc bytes: " << bad_alloc_bytes;
+  LOG(INFO) << "Total extern alloc bytes: " << extern_alloc_bytes;
 
   ret.attrs["storage_id"] = std::make_shared<any>(std::move(storage));
   ret.attrs["storage_inplace_index"] = std::make_shared<any>(std::move(storage_inplace_index));

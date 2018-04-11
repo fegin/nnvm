@@ -66,6 +66,7 @@ Graph PartitionPass(Graph src) {
     src.GetAttr<unordered_map<uint32_t, std::vector<uint32_t>>>("backward2forward");
   const string& tiling_type = dmlc::GetEnv("TOFU_TILING_TYPE", string("kcuts"));
   const int oversharding = dmlc::GetEnv("TOFU_OVERSHARDING", 0);
+  const int fused_conversion = dmlc::GetEnv("TOFU_FUSED_CONVERSION", 0);
   const int use_bfs = dmlc::GetEnv("TOFU_USE_BFS_LEVEL", 0);
 
   const int num_devices = src.GetAttr<int>("num_devices");
@@ -74,6 +75,7 @@ Graph PartitionPass(Graph src) {
     
   LOG(INFO) << "Tiling type: " << tiling_type;
   LOG(INFO) << "Oversharding status=" << oversharding;
+  LOG(INFO) << "Fused conversion status=" << fused_conversion;
   LOG(INFO) << "Number of cuts: " << num_cuts;
 
   const IndexedGraph& graph = src.indexed_graph();
@@ -175,6 +177,7 @@ Graph PartitionPass(Graph src) {
       num_partitions);
   pttn.SetOversharding(oversharding);
   pttn.SetDefaultGraph(default_group);
+  pttn.SetUseFusedConversion(fused_conversion);
 
   const Graph& ret = pttn.Run();
 

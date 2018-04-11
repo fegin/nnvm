@@ -459,6 +459,10 @@ class GraphPartitioner {
     oversharding_ = flag;
   }
 
+  void SetUseFusedConversion(bool flag) {
+    use_fused_conversion_ = flag;
+  }
+
   void SetDefaultGraph(const std::string& group) {
     default_group_ = group;
   }
@@ -504,6 +508,16 @@ class GraphPartitioner {
   // phases: split; allreduce/shuffle; concat.
   void ConvertGrid(const Grid& from, Grid* to);
 
+  // Create conversion operations between two grids. The conversion
+  // uses an operator that fuses split, allreduce/shuffle and
+  // concat phases of normal ConvertGrid.
+  // Note that the fused operator does not need extra buffer for
+  // split and concat. It launches kernel that reads data directly
+  // from other GPUs.
+  // Note: can only be enabled on single-machine-multi-GPUs and when
+  //       UVA is supported.
+  void FuseConvertGrid(const Grid& from, Grid* to);
+
   // Connect the input grids and output grids by operators. It follows the idea of
   // recursive-partitionable operator.
   // Note that the input grids could be empty, in which the given operator should
@@ -523,6 +537,7 @@ class GraphPartitioner {
   const size_t num_devices_;
 
   bool oversharding_{false};
+  bool use_fused_conversion_{false};
   std::string default_group_;
 
   std::unordered_map<NodePtr, std::vector<TShape>> node_output_shapes_;

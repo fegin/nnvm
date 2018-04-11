@@ -124,6 +124,8 @@ Graph PlaceDevice(Graph src) {
       << "Need graph attribute \"device_copy_op\" in PlaceDevice";
   const string& device_group_attr_key = src.GetAttr<string>("device_group_attr_key");
   const Op* copy_op = Op::Get(src.GetAttr<string>("device_copy_op"));
+  const Op* tofu_fused_convert_op = Op::Get("_TofuFusedConvert");
+  const std::unordered_set<const Op*> mem_op = {copy_op, tofu_fused_convert_op};
   auto& device_assign_map = src.GetAttr<DeviceAssignMap>("device_assign_map");
   const IndexedGraph& idx = src.indexed_graph();
   DeviceVector device;
@@ -225,7 +227,7 @@ Graph PlaceDevice(Graph src) {
     // If this node is not a copy node. Loop all the node's input entry.
     // If the input is not placed on the same device with this node, we need to
     // create a new node to represent this node in the new graph.
-    if (inode.source->op() != copy_op) {
+    if (!mem_op.count(inode.source->op())) {
       for (const auto& e : inode.inputs) {
         if (dev_id != device[e.node_id]) {
           require_new_node = true;
@@ -267,7 +269,7 @@ Graph PlaceDevice(Graph src) {
         const NodeEntry& new_in_ent = new_node_map[in_ent.node_id]?
           NodeEntry{new_node_map[in_ent.node_id], in_ent.index, 0} :
           inode.source->inputs[i];
-        if (dev_id != device[in_ent.node_id] && inode.source->op() != copy_op) {
+        if (dev_id != device[in_ent.node_id] && !mem_op.count(inode.source->op())) {
           // Input device and node device is different. Insert copy node.
           auto copy_key = std::make_tuple(in_ent.node_id, in_ent.index, dev_id);
           auto it = copy_map.find(copy_key);

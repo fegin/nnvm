@@ -59,12 +59,13 @@ class Grid {
   Block& BlockAt(size_t i) { return blocks_.at(i); }
   const Block& BlockAt(size_t i) const { return blocks_.at(i); }
 
+  // If device placement before split is:
   //  -----------------
   //  |   0   |   1   |
   //  -----------------
   //  |   2   |   3   |
   //  -----------------
-  //  After OuterSplit(Scheme::Cut(1), 2)
+  // then after OuterSplit(Scheme::Cut(1), 2):
   //  -----------------
   //  | 0 | 1 | 4 | 5 |
   //  -----------------
@@ -72,12 +73,13 @@ class Grid {
   //  -----------------
   void OuterSplit(const Scheme& sch, size_t num_splits, SplitFn splitfn = nullptr);
 
+  // If device placement before split is:
   //  -----------------
   //  |   0   |   1   |
   //  -----------------
   //  |   2   |   3   |
   //  -----------------
-  //  After InnerSplit(Scheme::Cut(1), 2)
+  // then after InnerSplit(Scheme::Cut(1), 2):
   //  -----------------
   //  | 0 | 4 | 1 | 5 |
   //  -----------------

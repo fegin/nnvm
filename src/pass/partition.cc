@@ -1998,6 +1998,52 @@ void GraphPartitioner::ConvertGrid(const Grid& from, Grid* to) {
       CHECK(poped.second == extra_to_cuts[i]);
     }
   }
+
+  if (use_fused_conversion_) {
+    FuseConvertGrid(from, to);
+  }
+}
+
+void GraphPartitioner::FuseConvertGrid(const Grid& from, Grid* to) {
+  std::unordered_set<Node*> root;
+  for (size_t i = 0; i < from.TotalNumBlocks(); ++i) {
+    root.insert(from.BlockAt(i).entry.node.get());
+  }
+  for (size_t i = 0; i < to->TotalNumBlocks(); ++i) {
+    auto& toblk = to->BlockAt(i);
+    std::vector<NodeEntry> blkroot;
+    std::vector<Node*> seq;
+    DFSVisitWithRoot({toblk.entry}, root,
+        [&] (const NodePtr& node) {
+          for (const auto& inent : node->inputs) {
+            if (root.count(inent.node.get())) {
+              blkroot.push_back(inent);
+            }
+          }
+          seq.push_back(node.get());
+        });
+    //LOG(INFO) << "#Root blks: " << blkroot.size();
+    //LOG(INFO) << "Fused: [";
+    //for (Node* n : seq) {
+      //LOG(INFO) << "\t" << n->attrs.op->name;
+    //}
+    //LOG(INFO) << "]";
+    const Op* fused_convert_op = Op::Get("_TofuFusedConvert");
+    // Fused op name.
+    ostringstream oss;
+    oss << "_TOFU_CONVERT";
+    NodePtr node = Node::Create();
+    // all input entries
+    node->inputs = std::move(blkroot);
+    node->attrs.op = fused_convert_op;
+    node->attrs.name = oss.str();
+    //node->attrs.dict["num_args"] = std::to_string(node->inputs.size());
+    AssignDevice(node, DevName(toblk.device_group_id));
+    FinalizeNodeCreation(node);
+    toblk.entry = NodeEntry{node, 0, 0};
+    CHECK(node_output_shapes_[node].empty());
+    node_output_shapes_[node].push_back(to->block_shape());
+  }
 }
 
 void GraphPartitioner::PerformOp(const vector<const Grid*>& inputs,
