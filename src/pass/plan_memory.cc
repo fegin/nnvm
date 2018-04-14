@@ -165,7 +165,7 @@ class GraphAllocator {
 };
 
 // function to plan memory
-Graph PlanMemory(Graph ret) {
+Graph PlanMemoryGraphColoring(Graph ret) {
   // setup ref counter
   const IndexedGraph& idx = ret.indexed_graph();
 
@@ -313,6 +313,10 @@ Graph PlanMemory(Graph ret) {
   ret.attrs["storage_allocated_bytes"] = std::make_shared<any>(allocator.TotalAllocBytes());
   ret.attrs["storage_num_not_allocated"] = std::make_shared<any>(num_not_allocated);
   return ret;
+}
+
+Graph PlanMemory(Graph ret) {
+  return PlanMemoryGraphColoring(ret);
 }
 
 NNVM_REGISTER_PASS(PlanMemory)
