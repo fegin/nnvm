@@ -82,6 +82,10 @@ class GraphAllocator {
     }
     return total;
   }
+  size_t Bytes(StorageID sid) const {
+    if (sid < 0 || sid >= data_.size()) return 0;
+    return data_[sid]->max_bytes;
+  }
 
   // constructor
   explicit GraphAllocator(const IndexedGraph* idx,
@@ -136,6 +140,7 @@ class GraphAllocator {
     data_.emplace_back(std::move(ptr));
     return id;
   }
+
   // internal storage entry
   struct StorageEntry {
     // the id of the entry.
@@ -297,7 +302,7 @@ Graph PlanMemoryGraphColoring(Graph ret) {
       const uint32_t eid = idx.entry_id(e.first, e.second);
       size_sum += shape_vec[eid].Size();
     }
-    //LOG(INFO) << "]";
+    //LOG(INFO) << "] bytes=" << allocator.Bytes(kv.first);
     if (kv.first == GraphAllocator::kBadStorageID) {
       bad_alloc_bytes = size_sum * 4;
     } else if (kv.first == GraphAllocator::kExternalStorageID) {
