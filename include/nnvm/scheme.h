@@ -57,6 +57,8 @@ using FAlignedSchemes = std::function<std::vector<SchemeRequest>(
     const std::vector<TShape>& input_shapes,
     const std::vector<TShape>& output_shapes)>;
 
+std::ostream& operator << (std::ostream& os, const Scheme& sch);
+
 }  // namespace pass
 }  // namespace nnvm
 

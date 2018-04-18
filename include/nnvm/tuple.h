@@ -547,6 +547,12 @@ class TShape : public Tuple<index_t> {
 #endif
 };
 
+TShape operator + (const TShape& shp1, const TShape& shp2);
+TShape operator - (const TShape& shp1, const TShape& shp2);
+TShape operator / (const TShape& shp1, const TShape& shp2);
+TShape max(const TShape& shp1, const TShape& shp2);
+TShape min(const TShape& shp1, const TShape& shp2);
+
 }  // namespace nnvm
 
 #endif  // NNVM_TUPLE_H_

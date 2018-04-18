@@ -35,7 +35,7 @@ include $(NNVM_PLUGINS)
 
 all: lib/libnnvm.a lib/libnnvm_example.so
 
-SRC = $(wildcard src/*.cc src/*/*.cc)
+SRC = $(wildcard src/*.cc src/*/*.cc src/*/*/*.cc)
 ALL_OBJ = $(patsubst %.cc, build/%.o, $(SRC))
 ALL_DEP = $(ALL_OBJ) $(PLUGIN_OBJ)
 

@@ -9,6 +9,7 @@
 #include <nnvm/pass_functions.h>
 
 #include "./partition.h"
+#include "./tiling.h"
 
 using namespace std;
 
@@ -91,28 +92,6 @@ Graph PartitionPass(Graph src) {
       equal.emplace_back(out_ent_id, fwd_ent_id);
     }
   }
-  // Set all element-wise operators' input and output entries to have the same partition.
-  /*for (uint32_t nid = 0; nid < graph.num_nodes(); ++nid) {
-    const Node* node = graph[nid].source;
-    if (node->is_variable()) {
-      continue;
-    }
-    const auto& opname = node->op()->name;
-    if (opname == "Activation" ||
-        opname == "elemwise_add" ||
-        opname == "_backward_Activation" ||
-        opname == "ElementWiseSum" ||
-        opname == "_backward_add") {
-      CHECK_GT(node->inputs.size(), 0);
-      const uint32_t inent0_id = graph.entry_id(node->inputs[0]);
-      for (size_t i = 1; i < node->inputs.size(); ++i) {
-        equal.emplace_back(graph.entry_id(node->inputs[i]), inent0_id);
-      }
-      for (size_t i = 0; i < node->num_outputs(); ++i) {
-        equal.emplace_back(graph.entry_id(nid, i), inent0_id);
-      }
-    }
-  }*/
 
   NodeEntryGroups groups(graph.num_node_entries(), equal);
 
@@ -130,44 +109,20 @@ Graph PartitionPass(Graph src) {
     lvls = nnlvls;
   }
 
-  Tiling* tiling = nullptr;
-  if (tiling_type == "kcuts") {
-    // Cut algorithm.
-    CutAlgorithm* algo = new CutAlgorithm(&src, *lvls, groups);
-    cost_t total_cost = algo->KCuts(num_cuts);
-    algo->Print();
-    LOG(INFO) << "Total K-cuts cost: " << total_cost;
-    if (oversharding) {
-      LOG(INFO) << "Oversharding enabled";
-      Tiling* overshard_tiling = new DataParallelism(&src, groups, 2);
-      tiling = new MergeTiling(&src, algo, overshard_tiling);
-    } else {
-      tiling = algo;
-    }
-  } else if (tiling_type == "k-equal-cuts") {
-    CutAlgorithm* algo = new CutAlgorithm(&src, *lvls, groups);
-    cost_t total_cost = algo->KEqualCuts(num_cuts);
-    algo->Print();
-    LOG(INFO) << "One-cut cost: " << total_cost;
-    tiling = algo;
-  } else if (tiling_type == "datapar") {
-    // Data parallelism
-    tiling = new DataParallelism(&src, groups, num_devices);
-  } else if (tiling_type == "modelpar") {
-    // Model parallelism
-    tiling = new ModelParallelism(&src, groups, num_devices);
-  } else if (tiling_type == "hybridpar") {
-    // Hybrid parallelism
-    tiling = new HybridParallelism(&src, groups, num_devices);
-  } else if (tiling_type == "spartan") {
-    SpartanTiling* spartan = new SpartanTiling(&src, groups, num_devices);
-    spartan->Run();
-    tiling = spartan;
-  } else if (tiling_type == "usertiling") {
-    // User defined tiling
-    tiling = new UserTiling(&src, groups, num_devices);
+  unique_ptr<Tiling> tiling = Tiling::Create(
+      tiling_type,
+      &src,
+      *lvls,
+      groups,
+      num_devices);
+  tiling->Print();
+  if (oversharding) {
+    LOG(INFO) << "Oversharding enabled";
+    //Tiling* overshard_tiling = new DataParallelism(&src, groups, 2);
+    //tiling = new MergeTiling(&src, algo, overshard_tiling);
+    LOG(FATAL) << "Disable for now";
   }
-
+  
   // Graph partitioner.
   CHECK_NOTNULL(tiling);
   const int num_partitions = oversharding? num_devices * 2 : num_devices;
@@ -181,7 +136,6 @@ Graph PartitionPass(Graph src) {
 
   const Graph& ret = pttn.Run();
 
-  delete tiling;
   return ret;
 }
 
