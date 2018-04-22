@@ -34,6 +34,32 @@ inline int GetNumCuts(int num_devices) {
   return num_cut;
 }
 
+inline std::vector<uint32_t> UnionFind(
+    uint32_t n,
+    const std::vector<std::pair<uint32_t, uint32_t>>& equals) {
+  std::vector<uint32_t> groups(n, 0);
+  for (uint32_t i = 0; i < groups.size(); ++i) {
+    groups[i] = i;
+  }
+  for (const auto& eq : equals) {
+    uint32_t g1 = eq.first;
+    uint32_t g2 = eq.second;
+    while (groups[g1] != g1) g1 = groups[g1];
+    while (groups[g2] != g2) g2 = groups[g2];
+    const uint32_t group = std::min(g1, g2);
+    groups[g1] = group;
+    groups[g2] = group;
+    groups[eq.first] = group;
+    groups[eq.second] = group;
+  }
+  for (size_t i = 0; i < groups.size(); ++i) {
+    uint32_t g = groups[i];
+    while (g != groups[g]) g = groups[g];
+    groups[i] = g;
+  }
+  return groups;
+}
+
 }  // namespace utils
 }  // namespace pass
 }  // namespace nnvm

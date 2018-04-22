@@ -10,6 +10,8 @@
 #include <functional>
 #include <unordered_map>
 
+#include "./tofu/search_graph.h"
+
 namespace nnvm {
 namespace pass {
 namespace {
@@ -104,27 +106,41 @@ Graph Gradient(Graph src) {
   }
 
   // traverse backward
+  typedef std::pair<std::vector<NodeEntry>, std::vector<NodeEntry>> Segment;
+  std::unordered_map<NodeEntry, Segment> fwdent2bwdsegment;
+  std::unordered_map<const Node*, Segment> fwdnode2bwdsegment;
   static auto& grad_fun_map = Op::GetAttr<FGradient>("FGradient");
-  std::vector<NodeEntry> out_agg_grads;
   for (auto rit = topo_order.rbegin(); rit != topo_order.rend(); ++rit) {
     const NodePtr ptr = *rit;
-    if (ptr->is_variable()) continue;
-    out_agg_grads.clear();
-    for (GradEntry& e : output_grads.at(ptr.get())) {
+    std::vector<NodeEntry> out_agg_grads;
+    for (uint32_t i = 0; i < output_grads.at(ptr.get()).size(); ++i) {
+      Segment segment;
+      GradEntry& e = output_grads.at(ptr.get())[i];
+      segment.first = e.grads;
       e.sum = agg_fun(e.grads);
+      segment.second = {e.sum};
+      fwdent2bwdsegment[NodeEntry{ptr, i, 0}] = std::move(segment);
       out_agg_grads.push_back(e.sum);
     }
-    const std::vector<NodeEntry>& input_grads = grad_fun_map[ptr->op()]
-        (mirror_map.size() == 0 ? ptr : mirror_map.at(ptr.get()), out_agg_grads);
-    CHECK_EQ(input_grads.size(), ptr->inputs.size())
-        << "Gradient function not returning enough gradient";
-    for (size_t i = 0; i < ptr->inputs.size(); ++i) {
-      const NodePtr in_node = ptr->inputs[i].node;
-      const uint32_t index = ptr->inputs[i].index;
-      output_grads[in_node.get()][index].grads.emplace_back(input_grads[i]);
+    if (ptr->is_variable()) {
+      fwdnode2bwdsegment[ptr.get()] = Segment();
+    } else {
+      const std::vector<NodeEntry>& input_grads = grad_fun_map[ptr->op()]
+          (mirror_map.size() == 0 ? ptr : mirror_map.at(ptr.get()), out_agg_grads);
+      CHECK_EQ(input_grads.size(), ptr->inputs.size())
+          << "Gradient function not returning enough gradient";
+      // Save input grads.
+      for (size_t i = 0; i < ptr->inputs.size(); ++i) {
+        const NodePtr in_node = ptr->inputs[i].node;
+        const uint32_t index = ptr->inputs[i].index;
+        output_grads[in_node.get()][index].grads.emplace_back(input_grads[i]);
+      }
+      Segment segment;
+      segment.first = out_agg_grads;
+      segment.second = input_grads;
+      fwdnode2bwdsegment[ptr.get()] = std::move(segment);
     }
   }
-
   // Aggregate gradients of each GradEntry
   for (auto& map_pair : output_grads) {
     for (GradEntry& grad_entry : map_pair.second) {
@@ -139,8 +155,6 @@ Graph Gradient(Graph src) {
   Graph ret;
   // Merge forward graph's outputs. Note that we don't keep the original attributes in
   // forward graph since they may be invalid due to the graph change.
-  // TODO(minjie): Should have mechanism to declare which attribute is invalid after this
-  // GradientPass.
   ret.outputs.insert(ret.outputs.end(), src.outputs.begin(), src.outputs.end());
   // Also put the xs' grads in the outputs.
   for (const NodeEntry& e : xs) {
@@ -184,6 +198,81 @@ Graph Gradient(Graph src) {
   }
   ret.attrs["forward2backward"] = std::make_shared<any>(std::move(forward2backward));
   ret.attrs["backward2forward"] = std::make_shared<any>(std::move(backward2forward));
+
+  typedef std::pair<std::vector<IndexedGraph::NodeEntry>,
+                    std::vector<IndexedGraph::NodeEntry>> View;
+  std::unordered_map<NodeEntry, View> fwdent2bwdview;
+  std::unordered_map<const Node*, View> fwdnode2bwdview;
+  for (const auto& kv : fwdnode2bwdsegment) {
+    const Node* fwdnode = kv.first;
+    const auto& seg = kv.second;
+    LOG(INFO) << fwdnode->attrs.name;
+    for (const auto& x : seg.first) {
+      LOG(INFO) << "\tFrom: " << x.node->attrs.name << "#" << x.index
+        << " ?" << idxgraph.has_node(x.node.get());
+    }
+    for (const auto& x : seg.second) {
+      LOG(INFO) << "\tTo: " << x.node->attrs.name << "#" << x.index
+        << " ?" << idxgraph.has_node(x.node.get());
+    }
+    fwdnode2bwdview[fwdnode] = View();
+    bool exist = false;
+    for (const auto& ent : seg.second) {
+      if (idxgraph.has_node(ent.node.get())) {
+        exist = true;
+        break;
+      }
+    }
+    if (exist) {
+      for (const auto& ent : seg.first) {
+        if (idxgraph.has_node(ent.node.get())) {
+          fwdnode2bwdview[fwdnode].first.push_back(
+              idxgraph.get_index_entry(ent));
+        }
+      }
+      for (const auto& ent : seg.second) {
+        if (idxgraph.has_node(ent.node.get())) {
+          fwdnode2bwdview[fwdnode].second.push_back(
+              idxgraph.get_index_entry(ent));
+        }
+      }
+    }
+  }
+  for (const auto& kv : fwdent2bwdsegment) {
+    const auto& fwdent = kv.first;
+    const auto& seg = kv.second;
+    fwdent2bwdview[fwdent] = View();
+    bool exist = false;
+    for (const auto& ent : seg.second) {
+      if (!idxgraph.has_node(ent.node.get())) {
+        exist = true;
+        break;
+      }
+    }
+    if (exist) {
+      for (const auto& ent : seg.first) {
+        if (idxgraph.has_node(ent.node.get())) {
+          fwdent2bwdview[fwdent].first.push_back(
+              idxgraph.get_index_entry(ent));
+        }
+      }
+      for (const auto& ent : seg.second) {
+        if (idxgraph.has_node(ent.node.get())) {
+          fwdent2bwdview[fwdent].second.push_back(
+              idxgraph.get_index_entry(ent));
+        }
+      }
+    }
+  }
+
+  ret.attrs["fwdent2bwdview"] = std::make_shared<any>(std::move(fwdent2bwdview));
+  ret.attrs["fwdnode2bwdview"] = std::make_shared<any>(std::move(fwdnode2bwdview));
+
+  MegaGraph mg(&ret);
+  mg.Print();
+  //mg.MergeElementwise();
+
+  LOG(FATAL) << "!!!!!";
 
   return ret;
 }

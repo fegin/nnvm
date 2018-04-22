@@ -3,6 +3,8 @@
 #include <nnvm/graph_attr_types.h>
 #include <queue>
 
+#include "./utils.h"
+
 using namespace std;
 
 namespace nnvm {
@@ -356,6 +358,282 @@ void NeuralLevels::Print() const {
     }
   }
   LOG(INFO) << "#Levels: " << node_levels_.size();
+}
+
+namespace {
+inline bool AddInEntryIfNotExist(NodePtr node, const NodeEntry& toadd) {
+  bool found = false;
+  for (const auto& ent : node->inputs) {
+    if (ent.node == toadd.node
+        && ent.index == toadd.index
+        && ent.version == toadd.version) {
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    node->inputs.push_back(toadd);
+    return true;
+  }
+  return false;
+}
+inline void FindEntry(
+    const Node* n1, const Node* n2, unordered_set<NodeEntry>* ret) {
+  for (const auto& ent : n2->inputs) {
+    if (ent.node.get() == n1) {
+      ret->insert(ent);
+    }
+  }
+}
+inline void FindEntry(
+    const Node* n1, const vector<const Node*>& n2_set, unordered_set<NodeEntry>* ret) {
+  for (const Node* n2 : n2_set) {
+    FindEntry(n1, n2, ret);
+  }
+}
+inline bool IsElementWiseNode(const Node* n) {
+  if (n->is_variable()) return false;
+  const auto& name = n->op()->name;
+  return name == "Activation"
+    || name == "elemwise_add"
+    || name == "_mul"
+    || name == "_backward_Activation"
+    || name == "_backward_add"
+    || name == "_backward_mul"
+    || name == "ElementWiseSum"
+    || name == "_grad_add";
+}
+}  // namespace
+
+MegaGraph::MegaGraph(Graph* orig): orig_graph_(orig) {
+  CHECK(orig->attrs.count("fwdent2bwdview") != 0);
+  CHECK(orig->attrs.count("fwdnode2bwdview") != 0);
+  typedef std::pair<std::vector<IndexedGraph::NodeEntry>,
+                    std::vector<IndexedGraph::NodeEntry>> View;
+  typedef std::unordered_map<NodeEntry, View> Fwdent2bwdview;
+  typedef std::unordered_map<const Node*, View> Fwdnode2bwdview;
+  const auto& fwdent2bwdview = orig->GetAttr<Fwdent2bwdview>("fwdent2bwdview");
+  const auto& fwdnode2bwdview = orig->GetAttr<Fwdnode2bwdview>("fwdnode2bwdview");
+
+  const auto& origidx = orig->indexed_graph();
+  unordered_map<const Node*, NodePtr> orignode2newnode;
+  //unordered_map<NodeEntry, unordered_set<NodeEntry>> newent2origents;
+  //unordered_map<const Node*, uint32_t> newnode_num_outputs;
+  // Create mega graph.
+  
+  //for (uint32_t nid = 0; nid < origidx.num_nodes(); ++nid) {
+    //const Node* orignode = origidx[nid].source;
+    //if (orignode->attrs.name == "t0_l1_i2h/backward") {
+      //for (const auto& x : orignode->inputs) {
+        //LOG(INFO) << x.node->attrs.name;
+      //}
+      //LOG(FATAL) << "XXX";
+    //}
+  //}
+  for (uint32_t nid = 0; nid < origidx.num_nodes(); ++nid) {
+    const Node* orignode = origidx[nid].source;
+    if (fwdnode2bwdview.count(orignode)) {
+      LOG(INFO) << "Orig node: " << orignode->attrs.name;
+      NodePtr newnode = Node::Create();
+      orignode2newnode[orignode] = newnode;
+      //node_mappings_.insert(std::make_pair(newnode.get(), GraphView(orig, orignode)));
+      const auto& bwdview = fwdnode2bwdview.at(orignode);
+      //node_mappings_.at(newnode.get()).Merge(
+          //GraphView(orig, bwdview.first, bwdview.second));
+      //LOG(INFO) << node_mappings_.at(newnode.get());
+      auto fv = GraphView(orig, orignode);
+      auto bv = GraphView(orig, bwdview.first, bwdview.second);
+      LOG(INFO) << "Fwd view: " << fv << " | Bwd view: " << bv;
+      fv.Merge(bv);
+      LOG(INFO) << "  => " << fv;
+      //ostringstream oss;
+      //node_mappings_.at(newnode.get()).DFSNodeVisit([&] (const Node* n) {
+            //oss << n->attrs.name << " ";
+          //});
+      //LOG(INFO) << "\t=> [" << oss.str() << "]";
+      
+      //if (orignode->attrs.name == "t0_l1_i2h") {
+        //LOG(FATAL) << "XXX";
+      //}
+    }
+  }
+
+  //for (const auto& kv : fwdnode2bwdview) {
+  //  const Node* orig = kv.first;
+  //  const auto& view = kv.second;
+
+  //  NodePtr n = Node::Create();
+  //  orignode2newnode[orig] = n;
+  //  for (const Node* orig_bwd : kv.second) {
+  //    orignode2newnode[orig_bwd] = n;
+  //  }
+  //}
+
+  //for (const auto& kv1 : fwdnode2bwdnodes) {
+  //  const Node* n1 = kv1.first;
+  //  NodePtr newn1 = orignode2newnode[n1];
+  //  for (const auto& kv2 : fwdnode2bwdnodes) {
+  //    const Node* n2 = kv2.first;
+  //    const auto& n2_bwd = kv2.second;
+  //    NodePtr newn2 = orignode2newnode[n2];
+  //    if (n1 == n2) {
+  //      continue;
+  //    }
+  //    unordered_set<NodeEntry> entries;
+  //    FindEntry(n1, n2, &entries);
+  //    FindEntry(n1, n2_bwd, &entries);
+  //    if (!entries.empty()) {
+  //      uint32_t entidx = newnode_num_outputs[newn1.get()]++;
+  //      NodeEntry newent{newn1, entidx, 0};
+  //      newent2origents[newent] = std::move(entries);
+  //      newn2->inputs.push_back(newent);
+  //    }
+  //  }
+  //}
+  //for (const auto& kv : orignode2newnode) {
+  //  NodePtr newnode = kv.second;
+  //  if (newnode_num_outputs[newnode.get()] == 0) {
+  //    graph_.outputs.push_back(
+  //        NodeEntry{newnode, 0, 0});
+  //    ++newnode_num_outputs[newnode.get()];
+  //  }
+  //}
+  //const auto& newidx = graph_.indexed_graph();
+  //// Build mapping from new node to orig node groups.
+  //LOG(INFO) << "#mega nodes: " << newidx.num_nodes();
+  //orignode2meganode_.resize(origidx.num_nodes());
+  //for (const auto& kv : orignode2newnode) {
+  //  const Node* orig_node = kv.first;
+  //  const Node* new_node = kv.second.get();
+  //  const uint32_t orig_nid = origidx.node_id(orig_node);
+  //  meganode2orignodes_[new_node].push_back(orig_nid);
+  //  orignode2meganode_[orig_nid] = new_node;
+  //}
+  //for (auto& kv : meganode2orignodes_) {
+  //  std::sort(kv.second.begin(), kv.second.end());
+  //}
+  //for (const auto& kv : newent2origents) {
+  //  for (const auto& ent : kv.second) {
+  //    megaentry2origentries_[kv.first].push_back(origidx.entry_id(ent));
+  //  }
+  //}
+  //for (auto& kv : megaentry2origentries_) {
+  //  std::sort(kv.second.begin(), kv.second.end());
+  //}
+}
+
+void MegaGraph::Print() {
+  const auto& idx = graph_.indexed_graph();
+  const auto& origidx = orig_graph_->indexed_graph();
+  //////////////////// DEBUG PRINT
+  //for (uint32_t nid = 0; nid < origidx.num_nodes(); ++nid) {
+  //  const Node* n = origidx[nid].source;
+  //  for (uint32_t i = 0; i < n->num_outputs(); ++i) {
+  //    LOG(INFO) << "Entry#" << origidx.entry_id(nid, i)
+  //      << " = Node#" << nid << "#" << i << "(" << n->attrs.name << ")["
+  //      << (n->is_variable()? "var" : n->attrs.op->name) << "]";
+  //  }
+  //}
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    const Node* node = idx[nid].source;
+    ostringstream oss;
+    node_mappings_.at(node).DFSNodeVisit([&] (const Node* n) {
+          oss << n->attrs.name << " ";
+        });
+    LOG(INFO) << "Node#" << nid << " => [" << oss.str() << "]";
+  }
+  //for (uint32_t eid = 0; eid < newidx.num_node_entries(); ++eid) {
+  //  ostringstream oss;
+  //  for (const uint32_t origeid : entry_groups_[eid]) {
+  //    oss << origeid << " ";
+  //  }
+  //  LOG(INFO) << "Entry#" << eid << " => [" << oss.str() << "]";
+  //}
+  //////////////////// DEBUG PRINT
+  //cout << "digraph {" << endl;
+  //for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+  //  const Node* node = idx[nid].source;
+  //  for (const auto& ent : node->inputs) {
+  //    const uint32_t inid = idx.node_id(ent.node.get());
+  //    cout << "\tn" << inid << " -> n" << nid << ";" << endl;
+  //  }
+  //}
+  //cout << "}" << endl;
+}
+  
+bool MegaGraph::IsElementWise(uint32_t nid) {
+  //const auto& idx = graph_.indexed_graph();
+  //const auto& origidx = orig_graph_->indexed_graph();
+  //const Node* node = idx[nid].source;
+  //if (meganode2orignodes_[node].empty()) return false;
+  //for (const uint32_t orignid : meganode2orignodes_[node]) {
+  //  const Node* orignode = origidx[orignid].source;
+  //  if (!IsElementWiseNode(orignode)) {
+  //    return false;
+  //  }
+  //}
+  //return true;
+  return false;
+}
+
+ostream& operator << (ostream& os, const vector<uint32_t>& v) {
+  os << "[";
+  for (auto x : v) {
+    os << x << " ";
+  }
+  return os << "]";
+}
+
+void MegaGraph::MergeElementwise() {
+  //const auto& idx = graph_.indexed_graph();
+  //const auto& origidx = orig_graph_->indexed_graph();
+  //// Sanity check
+  //unordered_map<string, vector<uint32_t>> elemgroups;
+  //for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+  //  const Node* node = idx[nid].source;
+  //  string elemgroup = "";
+  //  for (uint32_t orignid : meganode2orignodes_[node]) {
+  //    const Node* orignode = origidx[orignid].source;
+  //    if (orignode->attrs.dict.count("elemwise_group")) {
+  //      elemgroup = orignode->attrs.dict.at("elemwise_group");
+  //    }
+  //  }
+  //  if (elemgroup != "") {
+  //    CHECK(IsElementWise(nid));
+  //    elemgroups[elemgroup].insert(
+  //        elemgroups[elemgroup].end(),
+  //        meganode2orignodes_[node].begin(),
+  //        meganode2orignodes_[node].end());
+  //  }
+  //}
+  //for (const auto& kv : elemgroups) {
+  //  LOG(INFO) << kv.first << ": " << kv.second;
+  //}
+  //// Create entry equals.
+  //for (const auto& kv : elemgroups) {
+  //  const uint32_t anchor = origidx.entry_id(kv.second[0], 0);
+  //  for (const uint32_t orignid : kv.second) {
+  //    const Node* orignode = origidx[orignid].source;
+  //    for (const auto& ent : orignode->inputs) {
+  //      equals_.push_back(std::make_pair(anchor, origidx.entry_id(ent)));
+  //    }
+  //    for (uint32_t i = 0; i < orignode->num_outputs(); ++i) {
+  //      equals_.push_back(std::make_pair(anchor, origidx.entry_id(orignid, i)));
+  //    }
+  //  }
+  //}
+}
+
+void MegaGraph::MergeWeightAndGradients() {
+  //const auto& idx = graph_.indexed_graph();
+  //const auto& origidx = orig_graph_->indexed_graph();
+  //unordered_set<uint32_t> out_nid;
+  //for (const auto& ent : orig_graph_->outputs) {
+  //  out_nid.insert(origidx.node_id(ent.node.get()));
+  //}
+  //for (uint32_t orignid : out_nid) {
+  //  const Node* meganode = orignode2meganode_[orignid];
+  //}
 }
 
 }  // namespace pass

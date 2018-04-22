@@ -139,7 +139,38 @@ class NeuralLevels : public Levels {
   std::vector<std::unordered_set<uint32_t>> entry_to_nodes_;
   // Node to all its input/output nodes.
   std::vector<std::unordered_set<uint32_t>> node_to_entries_;
+};
 
+class MegaGraph {
+ public:
+  MegaGraph(Graph* orig);
+
+  void Print();
+
+  void MergeElementwise();
+
+  void MergeWeightAndGradients();
+
+ private:
+  bool IsElementWise(uint32_t nid);
+
+ private:
+  Graph graph_;
+  Graph* orig_graph_;
+
+  //std::unordered_map<const Node*, uint32_t> num_outputs_;
+
+  // Group of nodes in the original graph. This is a map from the
+  // meta graph node_id to its associated node group.
+  // The first node in the group is always the forward node in the original graph.
+  //std::vector<const Node*> orignode2meganode_;
+  std::unordered_map<const Node*, GraphView> node_mappings_;
+
+  // Group of entries in the original graph. This is a map from
+  // the meta graph entry_id to its associated entry group.
+  std::unordered_map<NodeEntry, GraphView> entry_mappings_;
+
+  std::vector<std::pair<uint32_t, uint32_t>> equals_;
 };
 
 }  // namespace pass

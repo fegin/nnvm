@@ -397,22 +397,22 @@ void GraphPartitioner::ConvertGrid(const Grid& from, Grid* to) {
 }
 
 void GraphPartitioner::FuseConvertGrid(const Grid& from, Grid* to) {
-  std::unordered_set<Node*> root;
+  std::unordered_set<const Node*> root;
   for (size_t i = 0; i < from.TotalNumBlocks(); ++i) {
     root.insert(from.BlockAt(i).entry.node.get());
   }
   for (size_t i = 0; i < to->TotalNumBlocks(); ++i) {
     auto& toblk = to->BlockAt(i);
     std::vector<NodeEntry> blkroot;
-    std::vector<Node*> seq;
-    DFSVisitWithRoot({toblk.entry}, root,
-        [&] (const NodePtr& node) {
+    std::vector<const Node*> seq;
+    DFSVisitWithRoot({toblk.entry.node.get()}, root,
+        [&] (const Node* node) {
           for (const auto& inent : node->inputs) {
             if (root.count(inent.node.get())) {
               blkroot.push_back(inent);
             }
           }
-          seq.push_back(node.get());
+          seq.push_back(node);
         });
     //LOG(INFO) << "#Root blks: " << blkroot.size();
     //LOG(INFO) << "Fused: [";

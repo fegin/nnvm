@@ -41,6 +41,10 @@ struct NodeEntry {
   uint32_t version;
 };
 
+inline bool operator == (const NodeEntry& e1, const NodeEntry& e2) {
+  return (e1.node == e2.node) && (e1.index == e2.index) && (e1.version == e2.version);
+}
+
 /*!
  * \brief The attributes of the current operation node.
  *  Usually are additional parameters like axis,
@@ -127,5 +131,16 @@ inline uint32_t Node::num_inputs() const {
 }
 
 }  // namespace nnvm
+
+namespace std {
+template <>
+struct hash<nnvm::NodeEntry> {
+  size_t operator () (const nnvm::NodeEntry& e) const {
+    return std::hash<nnvm::Node*>()(e.node.get()) ^
+          (std::hash<size_t>()(e.index) << 1 >> 1) ^
+          (std::hash<size_t>()(e.version) << 1);
+  }
+};
+}  // namespace std
 
 #endif  // NNVM_NODE_H_
