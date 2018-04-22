@@ -420,41 +420,22 @@ MegaGraph::MegaGraph(Graph* orig): orig_graph_(orig) {
   //unordered_map<NodeEntry, unordered_set<NodeEntry>> newent2origents;
   //unordered_map<const Node*, uint32_t> newnode_num_outputs;
   // Create mega graph.
-  
-  //for (uint32_t nid = 0; nid < origidx.num_nodes(); ++nid) {
-    //const Node* orignode = origidx[nid].source;
-    //if (orignode->attrs.name == "t0_l1_i2h/backward") {
-      //for (const auto& x : orignode->inputs) {
-        //LOG(INFO) << x.node->attrs.name;
-      //}
-      //LOG(FATAL) << "XXX";
-    //}
-  //}
   for (uint32_t nid = 0; nid < origidx.num_nodes(); ++nid) {
     const Node* orignode = origidx[nid].source;
     if (fwdnode2bwdview.count(orignode)) {
       LOG(INFO) << "Orig node: " << orignode->attrs.name;
       NodePtr newnode = Node::Create();
       orignode2newnode[orignode] = newnode;
-      //node_mappings_.insert(std::make_pair(newnode.get(), GraphView(orig, orignode)));
+      node_mappings_.insert(std::make_pair(newnode.get(), GraphView(orig, orignode)));
       const auto& bwdview = fwdnode2bwdview.at(orignode);
-      //node_mappings_.at(newnode.get()).Merge(
-          //GraphView(orig, bwdview.first, bwdview.second));
+      node_mappings_.at(newnode.get()).Merge(
+          GraphView(orig, bwdview.first, bwdview.second));
       //LOG(INFO) << node_mappings_.at(newnode.get());
-      auto fv = GraphView(orig, orignode);
-      auto bv = GraphView(orig, bwdview.first, bwdview.second);
-      LOG(INFO) << "Fwd view: " << fv << " | Bwd view: " << bv;
-      fv.Merge(bv);
-      LOG(INFO) << "  => " << fv;
-      //ostringstream oss;
-      //node_mappings_.at(newnode.get()).DFSNodeVisit([&] (const Node* n) {
-            //oss << n->attrs.name << " ";
-          //});
-      //LOG(INFO) << "\t=> [" << oss.str() << "]";
-      
-      //if (orignode->attrs.name == "t0_l1_i2h") {
-        //LOG(FATAL) << "XXX";
-      //}
+      ostringstream oss;
+      node_mappings_.at(newnode.get()).DFSNodeVisit([&] (const Node* n) {
+            oss << n->attrs.name << " ";
+          });
+      LOG(INFO) << "\t=> [" << oss.str() << "]";
     }
   }
 

@@ -123,9 +123,15 @@ std::ostream& operator << (std::ostream& os, const GraphView& gv) {
   for (const auto& ent : gv.end_entries_) {
     os << idx[ent.node_id].source->attrs.name << "#" << ent.index << " ";
   }
-  os << "] [";
-  for (const uint32_t nid : gv.node_ids_) {
-    os << idx[nid].source->attrs.name << " ";
+  os << "] nodes=[";
+  for (const auto& n : gv.node_ids_) {
+    os << idx[n.first].source->attrs.name << " ";
+  }
+  os << "] entries=[";
+  for (const auto& n : gv.node_ids_) {
+    for (const auto& i : n.second) {
+      os << idx[n.first].source->attrs.name << "#" << i << " ";
+    }
   }
   return os << "]";
 }
@@ -159,46 +165,12 @@ bool ContainsIn(const Graph& graph,
 }  // namespace
 
 bool GraphView::Contains(const IndexedGraph::NodeEntry& e) const {
-  const auto& idx = graph_->indexed_graph();
-  const uint32_t eid = idx.entry_id(e);
-  if (end_entries_.empty()) return false;
-  if (start_set_.count(eid) || end_set_.count(eid)) {
-    return true;
-  }
-  return ContainsIn(*graph_, start_entries_, end_entries_, e)
-    && !ContainsIn(*graph_, end_entries_, start_entries_, e);
+  LOG(FATAL) << "Not implemented!";
+  return false;
 }
 
 void GraphView::Merge(const GraphView& other) {
   CHECK(this->graph_ == other.graph_);
-  /*const auto& idx = graph_->indexed_graph();
-  std::vector<IndexedGraph::NodeEntry> new_st, new_ed;
-  for (const auto& e : this->start_entries_) {
-    const uint32_t eid = idx.entry_id(e);
-    if (other.start_set_.count(eid) || !other.Contains(e)) {
-      new_st.push_back(e);
-    }
-  }
-  for (const auto& e : other.start_entries_) {
-    const uint32_t eid = idx.entry_id(e);
-    if (this->start_set_.count(eid) || !this->Contains(e)) {
-      new_st.push_back(e);
-    }
-  }
-  for (const auto& e : this->end_entries_) {
-    const uint32_t eid = idx.entry_id(e);
-    if (other.end_set_.count(eid) || !other.Contains(e)) {
-      new_ed.push_back(e);
-    }
-  }
-  for (const auto& e : other.end_entries_) {
-    const uint32_t eid = idx.entry_id(e);
-    if (this->end_set_.count(eid) || !this->Contains(e)) {
-      new_ed.push_back(e);
-    }
-  }
-  start_entries_.swap(new_st);
-  end_entries_.swap(new_ed);*/
   start_entries_.insert(start_entries_.end(),
                         other.start_entries_.begin(),
                         other.start_entries_.end());
@@ -212,12 +184,14 @@ void GraphView::BuildSet() {
   std::sort(start_entries_.begin(), start_entries_.end());
   std::sort(end_entries_.begin(), end_entries_.end());
   const auto& idx = graph_->indexed_graph();
+  const auto& conn = graph_->connectivity();
   start_set_.clear();
   end_set_.clear();
   for (const auto& e : start_entries_) start_set_.insert(idx.entry_id(e));
   for (const auto& e : end_entries_) end_set_.insert(idx.entry_id(e));
 
   node_ids_.clear();
+
   vector<const Node*> heads;
   unordered_set<const Node*> roots;
   for (const auto& e : end_entries_) {
@@ -226,10 +200,26 @@ void GraphView::BuildSet() {
   for (const auto& e : start_entries_) {
     roots.insert(idx[e.node_id].source);
   }
-
   DFSVisitWithRoot(heads, roots,
       [&] (const Node* node) {
-        node_ids_.push_back(idx.node_id(node));
+        uint32_t nid = idx.node_id(node);
+        vector<uint32_t> oidx;
+        for (uint32_t i = 0; i < node->num_outputs(); ++i) {
+          for (const auto& e : end_entries_) {
+            if ((nid == e.node_id && i == e.index)
+                || conn.has_path(node, i, idx[e.node_id].source)) {
+              oidx.push_back(i);
+              break;
+            }
+          }
+        }
+        node_ids_.push_back(std::make_pair(nid, oidx));
+        node_hashes_.insert(nid);
+      });
+  std::sort(node_ids_.begin(), node_ids_.end(),
+      [] (const pair<uint32_t, vector<uint32_t>>& n1,
+          const pair<uint32_t, vector<uint32_t>>& n2)->bool {
+        return n1.first < n2.first;
       });
 }
 

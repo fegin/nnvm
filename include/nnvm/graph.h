@@ -390,7 +390,8 @@ void PostOrderDFSVisitWithRoot(
     while (!stack.empty()) {
       std::pair<GNode, uint32_t>& back = stack.back();
       if (back.second == indegree(back.first)) {
-        if (visited.at(back.first)) {
+        if (all_head_hash.count(hash(back.first))
+           || visited.at(back.first)) {
           fvisit(back.first);
         }
         stack.pop_back();
@@ -435,7 +436,7 @@ inline void DFSVisitWithRoot(
 
 /* A graph view represents all nodes and entries that
  * are reacheable from start entries substract those
- * are reachable from end enries.*/
+ * are reachable from end entries.*/
 class GraphView {
   friend std::ostream& operator << (std::ostream& os, const GraphView& region);
  public:
@@ -474,28 +475,21 @@ class GraphView {
   // FVisit is : void(const Node* node, vector<uint32_t> outidx);
   // Note: Both start and end entries will be visited.
   template<typename FVisit>
-  void DFSEntryVisit(FVisit fvisit) const;
+  void DFSEntryVisit(FVisit fvisit) const {
+    const auto& idx = graph_->indexed_graph();
+    for (const auto& p : node_ids_) {
+      fvisit(idx[p.first].source, p.second);
+    }
+  }
 
   // FVisit is : void(const Node* node);
   // Note: Only nodes depending on the start entries will be visited.
   template<typename FVisit>
   void DFSNodeVisit(FVisit fvisit) const {
     const auto& idx = graph_->indexed_graph();
-    this->DFSEntryVisit(
-        [&] (const Node* node, const std::vector<uint32_t>& outidx) {
-          const uint32_t node_id = idx.node_id(node);
-          bool flag = true;
-          for (uint32_t i : outidx) {
-            const uint32_t eid = idx.entry_id(node_id, i);
-            if (start_set_.count(eid)) {
-              flag = false;
-              break;
-            }
-          }
-          if (flag) {
-            fvisit(node);
-          }
-        });
+    for (const auto& p : node_ids_) {
+      fvisit(idx[p.first].source);
+    }
   }
 
  private:
@@ -505,46 +499,11 @@ class GraphView {
   std::vector<IndexedGraph::NodeEntry> start_entries_, end_entries_;
   std::unordered_set<uint32_t> start_set_, end_set_;
 
-  std::vector<uint32_t> node_ids_;
+  std::vector<std::pair<uint32_t, std::vector<uint32_t>>> node_ids_;
+  std::unordered_set<uint32_t> node_hashes_;
 };
 
 std::ostream& operator << (std::ostream& os, const GraphView& gv);
-
-template<typename FVisit>
-void GraphView::DFSEntryVisit(FVisit fvisit) const {
-  const auto& idx = graph_->indexed_graph();
-  const auto& conn = graph_->connectivity();
-  std::unordered_set<const Node*> root;
-  for (const auto& ent : start_entries_) {
-    root.insert(idx[ent.node_id].source);
-  }
-  std::vector<const Node*> heads;
-  std::unordered_map<const Node*, std::vector<uint32_t> > head_ent_idx;
-  for (const auto& ent : end_entries_) {
-    const Node* node = idx[ent.node_id].source;
-    heads.push_back(node);
-    head_ent_idx[node].push_back(ent.index);
-  }
-  DFSVisitWithRoot(heads, root,
-    [&] (const Node* node) {
-      const uint32_t nid = idx.node_id(node);
-      if (head_ent_idx.count(node)) {
-        fvisit(node, head_ent_idx.at(node));
-        return;
-      }
-      // Prune out nodes that have no path from start entries.
-      std::vector<uint32_t> outidx;
-      for (uint32_t i = 0; i < node->num_outputs(); ++i) {
-        IndexedGraph::NodeEntry ent{nid, i, 0};
-        if (this->Contains(ent)) {
-          outidx.push_back(i);
-        }
-      }
-      if (!outidx.empty()) {
-        fvisit(node, outidx);
-      }
-    });
-}
 
 }  // namespace nnvm
 
