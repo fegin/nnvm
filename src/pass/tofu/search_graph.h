@@ -158,7 +158,7 @@ class MegaGraph {
   Graph graph_;
   Graph* orig_graph_;
 
-  //std::unordered_map<const Node*, uint32_t> num_outputs_;
+  std::unordered_map<const Node*, uint32_t> num_outputs_;
 
   // Group of nodes in the original graph. This is a map from the
   // meta graph node_id to its associated node group.
@@ -168,7 +168,7 @@ class MegaGraph {
 
   // Group of entries in the original graph. This is a map from
   // the meta graph entry_id to its associated entry group.
-  std::unordered_map<NodeEntry, GraphView> entry_mappings_;
+  std::unordered_map<const Node*, std::vector<GraphView>> entry_mappings_;
 
   std::vector<std::pair<uint32_t, uint32_t>> equals_;
 };

@@ -201,20 +201,20 @@ Graph Gradient(Graph src) {
 
   typedef std::pair<std::vector<IndexedGraph::NodeEntry>,
                     std::vector<IndexedGraph::NodeEntry>> View;
-  std::unordered_map<NodeEntry, View> fwdent2bwdview;
+  std::unordered_map<IndexedGraph::NodeEntry, View> fwdent2bwdview;
   std::unordered_map<const Node*, View> fwdnode2bwdview;
   for (const auto& kv : fwdnode2bwdsegment) {
     const Node* fwdnode = kv.first;
     const auto& seg = kv.second;
-    LOG(INFO) << fwdnode->attrs.name;
-    for (const auto& x : seg.first) {
-      LOG(INFO) << "\tFrom: " << x.node->attrs.name << "#" << x.index
-        << " ?" << idxgraph.has_node(x.node.get());
-    }
-    for (const auto& x : seg.second) {
-      LOG(INFO) << "\tTo: " << x.node->attrs.name << "#" << x.index
-        << " ?" << idxgraph.has_node(x.node.get());
-    }
+    //LOG(INFO) << fwdnode->attrs.name;
+    //for (const auto& x : seg.first) {
+    //  LOG(INFO) << "\tFrom: " << x.node->attrs.name << "#" << x.index
+    //    << " ?" << idxgraph.has_node(x.node.get());
+    //}
+    //for (const auto& x : seg.second) {
+    //  LOG(INFO) << "\tTo: " << x.node->attrs.name << "#" << x.index
+    //    << " ?" << idxgraph.has_node(x.node.get());
+    //}
     fwdnode2bwdview[fwdnode] = View();
     bool exist = false;
     for (const auto& ent : seg.second) {
@@ -239,16 +239,26 @@ Graph Gradient(Graph src) {
     }
   }
   for (const auto& kv : fwdent2bwdsegment) {
-    const auto& fwdent = kv.first;
+    const auto& fwdent = idxgraph.get_index_entry(kv.first);
     const auto& seg = kv.second;
     fwdent2bwdview[fwdent] = View();
     bool exist = false;
     for (const auto& ent : seg.second) {
-      if (!idxgraph.has_node(ent.node.get())) {
+      if (idxgraph.has_node(ent.node.get())) {
         exist = true;
         break;
       }
     }
+    //LOG(INFO) << idxgraph[fwdent.node_id].source->attrs.name
+    //  << "#" << fwdent.index;
+    //for (const auto& x : seg.first) {
+    //  LOG(INFO) << "\tFrom: " << x.node->attrs.name << "#" << x.index
+    //    << " ?" << idxgraph.has_node(x.node.get());
+    //}
+    //for (const auto& x : seg.second) {
+    //  LOG(INFO) << "\tTo: " << x.node->attrs.name << "#" << x.index
+    //    << " ?" << idxgraph.has_node(x.node.get());
+    //}
     if (exist) {
       for (const auto& ent : seg.first) {
         if (idxgraph.has_node(ent.node.get())) {
@@ -264,9 +274,14 @@ Graph Gradient(Graph src) {
       }
     }
   }
+  std::vector<IndexedGraph::NodeEntry> fwdoutputs;
+  for (const auto& ent : src.outputs) {
+    fwdoutputs.push_back(idxgraph.get_index_entry(ent));
+  }
 
   ret.attrs["fwdent2bwdview"] = std::make_shared<any>(std::move(fwdent2bwdview));
   ret.attrs["fwdnode2bwdview"] = std::make_shared<any>(std::move(fwdnode2bwdview));
+  ret.attrs["fwdoutputs"] = std::make_shared<any>(std::move(fwdoutputs));
 
   MegaGraph mg(&ret);
   mg.Print();

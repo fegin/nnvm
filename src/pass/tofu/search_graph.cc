@@ -408,22 +408,24 @@ inline bool IsElementWiseNode(const Node* n) {
 MegaGraph::MegaGraph(Graph* orig): orig_graph_(orig) {
   CHECK(orig->attrs.count("fwdent2bwdview") != 0);
   CHECK(orig->attrs.count("fwdnode2bwdview") != 0);
+  CHECK(orig->attrs.count("fwdoutputs") != 0);
   typedef std::pair<std::vector<IndexedGraph::NodeEntry>,
                     std::vector<IndexedGraph::NodeEntry>> View;
-  typedef std::unordered_map<NodeEntry, View> Fwdent2bwdview;
+  typedef std::unordered_map<IndexedGraph::NodeEntry, View> Fwdent2bwdview;
   typedef std::unordered_map<const Node*, View> Fwdnode2bwdview;
   const auto& fwdent2bwdview = orig->GetAttr<Fwdent2bwdview>("fwdent2bwdview");
   const auto& fwdnode2bwdview = orig->GetAttr<Fwdnode2bwdview>("fwdnode2bwdview");
+  const auto& fwdoutputs = orig->GetAttr<vector<IndexedGraph::NodeEntry>>("fwdoutputs");
 
   const auto& origidx = orig->indexed_graph();
   unordered_map<const Node*, NodePtr> orignode2newnode;
-  //unordered_map<NodeEntry, unordered_set<NodeEntry>> newent2origents;
-  //unordered_map<const Node*, uint32_t> newnode_num_outputs;
+  //unordered_map<NodeEntry, NodeEntry> origent2newent;
+  //unordered_map<const Node*, uint32_t> newnode_num_succs;
   // Create mega graph.
-  for (uint32_t nid = 0; nid < origidx.num_nodes(); ++nid) {
-    const Node* orignode = origidx[nid].source;
+  for (uint32_t orignid = 0; orignid < origidx.num_nodes(); ++orignid) {
+    const Node* orignode = origidx[orignid].source;
     if (fwdnode2bwdview.count(orignode)) {
-      LOG(INFO) << "Orig node: " << orignode->attrs.name;
+      //LOG(INFO) << "Orig node: " << orignode->attrs.name;
       NodePtr newnode = Node::Create();
       orignode2newnode[orignode] = newnode;
       node_mappings_.insert(std::make_pair(newnode.get(), GraphView(orig, orignode)));
@@ -431,81 +433,45 @@ MegaGraph::MegaGraph(Graph* orig): orig_graph_(orig) {
       node_mappings_.at(newnode.get()).Merge(
           GraphView(orig, bwdview.first, bwdview.second));
       //LOG(INFO) << node_mappings_.at(newnode.get());
-      ostringstream oss;
-      node_mappings_.at(newnode.get()).DFSNodeVisit([&] (const Node* n) {
-            oss << n->attrs.name << " ";
-          });
-      LOG(INFO) << "\t=> [" << oss.str() << "]";
+      //ostringstream oss;
+      //node_mappings_.at(newnode.get()).DFSNodeVisit([&] (const Node* n) {
+            //oss << n->attrs.name << " ";
+          //});
+      //LOG(INFO) << "\t=> [" << oss.str() << "]";
+      num_outputs_[newnode.get()] = orignode->num_outputs();
+      //newnode_num_succs[newnode.get()] = 0;
+      for (uint32_t i = 0; i < orignode->num_outputs(); ++i) {
+        const auto& origent = IndexedGraph::NodeEntry{orignid, i, 0};
+        NodeEntry newent{newnode, i, 0};
+        entry_mappings_[newnode.get()].push_back(
+            GraphView(orig, origent));
+        if (fwdent2bwdview.count(origent)) {
+          const auto& bwdview = fwdent2bwdview.at(origent);
+          entry_mappings_.at(newnode.get()).at(i).Merge(
+              GraphView(orig, bwdview.first, bwdview.second));
+        }
+      }
+      for (uint32_t i = 0; i < orignode->inputs.size(); ++i) {
+        // Connect the entry.
+        const auto& ent = orignode->inputs[i];
+        const Node* in = ent.node.get();
+        NodePtr newin = orignode2newnode.at(in);
+        newnode->inputs.push_back(NodeEntry{newin, ent.index, 0});
+      }
     }
   }
-
-  //for (const auto& kv : fwdnode2bwdview) {
-  //  const Node* orig = kv.first;
-  //  const auto& view = kv.second;
-
-  //  NodePtr n = Node::Create();
-  //  orignode2newnode[orig] = n;
-  //  for (const Node* orig_bwd : kv.second) {
-  //    orignode2newnode[orig_bwd] = n;
-  //  }
-  //}
-
-  //for (const auto& kv1 : fwdnode2bwdnodes) {
-  //  const Node* n1 = kv1.first;
-  //  NodePtr newn1 = orignode2newnode[n1];
-  //  for (const auto& kv2 : fwdnode2bwdnodes) {
-  //    const Node* n2 = kv2.first;
-  //    const auto& n2_bwd = kv2.second;
-  //    NodePtr newn2 = orignode2newnode[n2];
-  //    if (n1 == n2) {
-  //      continue;
-  //    }
-  //    unordered_set<NodeEntry> entries;
-  //    FindEntry(n1, n2, &entries);
-  //    FindEntry(n1, n2_bwd, &entries);
-  //    if (!entries.empty()) {
-  //      uint32_t entidx = newnode_num_outputs[newn1.get()]++;
-  //      NodeEntry newent{newn1, entidx, 0};
-  //      newent2origents[newent] = std::move(entries);
-  //      newn2->inputs.push_back(newent);
-  //    }
-  //  }
-  //}
-  //for (const auto& kv : orignode2newnode) {
-  //  NodePtr newnode = kv.second;
-  //  if (newnode_num_outputs[newnode.get()] == 0) {
-  //    graph_.outputs.push_back(
-  //        NodeEntry{newnode, 0, 0});
-  //    ++newnode_num_outputs[newnode.get()];
-  //  }
-  //}
-  //const auto& newidx = graph_.indexed_graph();
-  //// Build mapping from new node to orig node groups.
-  //LOG(INFO) << "#mega nodes: " << newidx.num_nodes();
-  //orignode2meganode_.resize(origidx.num_nodes());
-  //for (const auto& kv : orignode2newnode) {
-  //  const Node* orig_node = kv.first;
-  //  const Node* new_node = kv.second.get();
-  //  const uint32_t orig_nid = origidx.node_id(orig_node);
-  //  meganode2orignodes_[new_node].push_back(orig_nid);
-  //  orignode2meganode_[orig_nid] = new_node;
-  //}
-  //for (auto& kv : meganode2orignodes_) {
-  //  std::sort(kv.second.begin(), kv.second.end());
-  //}
-  //for (const auto& kv : newent2origents) {
-  //  for (const auto& ent : kv.second) {
-  //    megaentry2origentries_[kv.first].push_back(origidx.entry_id(ent));
-  //  }
-  //}
-  //for (auto& kv : megaentry2origentries_) {
-  //  std::sort(kv.second.begin(), kv.second.end());
-  //}
+  // Graph output entries.
+  for (const auto& origent : fwdoutputs) {
+    const Node* orignode = origidx[origent.node_id].source;
+    NodePtr newnode = orignode2newnode[orignode];
+    graph_.outputs.push_back(
+        NodeEntry{newnode, origent.index, 0});
+  }
 }
 
 void MegaGraph::Print() {
   const auto& idx = graph_.indexed_graph();
-  const auto& origidx = orig_graph_->indexed_graph();
+  //const auto& origidx = orig_graph_->indexed_graph();
   //////////////////// DEBUG PRINT
   //for (uint32_t nid = 0; nid < origidx.num_nodes(); ++nid) {
   //  const Node* n = origidx[nid].source;
@@ -522,15 +488,18 @@ void MegaGraph::Print() {
           oss << n->attrs.name << " ";
         });
     LOG(INFO) << "Node#" << nid << " => [" << oss.str() << "]";
+    for (uint32_t i = 0; i < num_outputs_.at(node); ++i) {
+      ostringstream oss;
+      entry_mappings_.at(node).at(i).DFSEntryVisit(
+          [&] (const Node* n, vector<uint32_t> idx) {
+            for (uint32_t i : idx) {
+              oss << n->attrs.name << "#" << i << " ";
+            }
+          });
+      LOG(INFO) << "\t#" << i << " => [" << oss.str() << "]";
+      //LOG(INFO) << "\t#" << i << " => " << entry_mappings_.at(node).at(i);
+    }
   }
-  //for (uint32_t eid = 0; eid < newidx.num_node_entries(); ++eid) {
-  //  ostringstream oss;
-  //  for (const uint32_t origeid : entry_groups_[eid]) {
-  //    oss << origeid << " ";
-  //  }
-  //  LOG(INFO) << "Entry#" << eid << " => [" << oss.str() << "]";
-  //}
-  //////////////////// DEBUG PRINT
   //cout << "digraph {" << endl;
   //for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
   //  const Node* node = idx[nid].source;

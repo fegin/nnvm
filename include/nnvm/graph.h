@@ -383,7 +383,7 @@ void PostOrderDFSVisitWithRoot(
   std::unordered_map<HashType, bool> visited;
   for (auto& head : heads) {
     HashType head_hash = hash(head);
-    if (visited.count(head_hash) == 0 && !isroot(head)) {
+    if (visited.count(head_hash) == 0) {
       stack.push_back(std::make_pair(head, 0));
       visited.insert(std::make_pair(head_hash, false));
     }
@@ -459,11 +459,11 @@ class GraphView {
     BuildSet();
   }
 
-  GraphView(Graph* g, const NodeEntry& ent): graph_(g) {
+  GraphView(Graph* g, const IndexedGraph::NodeEntry& ent): graph_(g) {
     const auto& idx = g->indexed_graph();
-    const auto& e = idx.get_index_entry(ent);
-    start_entries_.push_back(e);
-    end_entries_.push_back(e);
+    CHECK(ent.node_id < idx.num_nodes());
+    start_entries_.push_back(ent);
+    end_entries_.push_back(ent);
     BuildSet();
   }
 
