@@ -440,6 +440,12 @@ inline void DFSVisitWithRoot(
 class GraphView {
   friend std::ostream& operator << (std::ostream& os, const GraphView& region);
  public:
+  enum class VisitOption {
+    kVisitAll,
+    kNoStart,
+    kNoEnd,
+    kNoStartNoEnd,
+  };
   GraphView(Graph* g,
       const std::vector<IndexedGraph::NodeEntry>& st,
       const std::vector<IndexedGraph::NodeEntry>& ed):
@@ -475,10 +481,56 @@ class GraphView {
   // FVisit is : void(const Node* node, vector<uint32_t> outidx);
   // Note: Both start and end entries will be visited.
   template<typename FVisit>
-  void DFSEntryVisit(FVisit fvisit) const {
+  void DFSEntryVisit(FVisit fvisit, VisitOption option = VisitOption::kVisitAll) const {
     const auto& idx = graph_->indexed_graph();
-    for (const auto& p : node_ids_) {
-      fvisit(idx[p.first].source, p.second);
+    switch (option) {
+    case VisitOption::kVisitAll: 
+      for (const auto& p : node_ids_) {
+        fvisit(idx[p.first].source, p.second);
+      }
+      break;
+    case VisitOption::kNoStart:
+      for (const auto& p : node_ids_) {
+        std::vector<uint32_t> oidx;
+        for (uint32_t i : p.second) {
+          uint32_t eid = idx.entry_id(p.first, i);
+          if (end_set_.count(eid) || !start_set_.count(eid)) {
+            oidx.push_back(i);
+          }
+        }
+        if (!oidx.empty()) {
+          fvisit(idx[p.first].source, oidx);
+        }
+      }
+      break;
+    case VisitOption::kNoEnd:
+      for (const auto& p : node_ids_) {
+        std::vector<uint32_t> oidx;
+        for (uint32_t i : p.second) {
+          uint32_t eid = idx.entry_id(p.first, i);
+          if (!end_set_.count(eid)) {
+            oidx.push_back(i);
+          }
+        }
+        if (!oidx.empty()) {
+          fvisit(idx[p.first].source, oidx);
+        }
+      }
+      break;
+    case VisitOption::kNoStartNoEnd:
+      for (const auto& p : node_ids_) {
+        std::vector<uint32_t> oidx;
+        for (uint32_t i : p.second) {
+          uint32_t eid = idx.entry_id(p.first, i);
+          if (!start_set_.count(eid) && !end_set_.count(eid)) {
+            oidx.push_back(i);
+          }
+        }
+        if (!oidx.empty()) {
+          fvisit(idx[p.first].source, oidx);
+        }
+      }
+      break;
     }
   }
 

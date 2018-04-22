@@ -10,6 +10,7 @@
 
 #include "./partition.h"
 #include "./tiling.h"
+#include "./search_graph.h"
 
 using namespace std;
 
@@ -80,24 +81,32 @@ Graph PartitionPass(Graph src) {
   LOG(INFO) << "Number of cuts: " << num_cuts;
 
   const IndexedGraph& graph = src.indexed_graph();
-  const uint32_t start_node_id = graph.node_id(src.outputs[0].node.get());
   // Construct equal set from gradient information. All output gradient entry should have the
   // same partition scheme with its corresponding input entry.
-  vector<pair<uint32_t, uint32_t>> equal;
-  for (const NodeEntry& out_ent : src.outputs) {
-    const uint32_t out_ent_id = graph.entry_id(out_ent);
-    if (backward2forward.find(out_ent_id) != backward2forward.end()) {
-      // This is a gradient output entry. Add equilibrium of it and its forward entry.
-      const uint32_t fwd_ent_id = backward2forward.at(out_ent_id)[0];
-      equal.emplace_back(out_ent_id, fwd_ent_id);
-    }
-  }
+  //vector<pair<uint32_t, uint32_t>> equal;
+  //for (const NodeEntry& out_ent : src.outputs) {
+  //  const uint32_t out_ent_id = graph.entry_id(out_ent);
+  //  if (backward2forward.find(out_ent_id) != backward2forward.end()) {
+  //    // This is a gradient output entry. Add equilibrium of it and its forward entry.
+  //    const uint32_t fwd_ent_id = backward2forward.at(out_ent_id)[0];
+  //    equal.emplace_back(out_ent_id, fwd_ent_id);
+  //  }
+  //}
+
+  MegaGraph mg(&src);
+  //mg.Print();
+  mg.MergeElementwise();
+  mg.MergeWeightAndGradients();
+  mg.MergeRNNSteps();
+  const auto& equal = mg.entry_equals();
 
   NodeEntryGroups groups(graph.num_node_entries(), equal);
 
   // TODO(minjie): chaos ownership
   Levels* lvls = nullptr;
   if (use_bfs) {
+    const uint32_t start_node_id =
+      graph.node_id(src.outputs[0].node.get());
     BFS* bfslvls = new BFS(&src, &groups);
     bfslvls->Run(start_node_id);
     bfslvls->Print();
@@ -108,6 +117,7 @@ Graph PartitionPass(Graph src) {
     nnlvls->Print();
     lvls = nnlvls;
   }
+  LOG(FATAL) << "!!!!!";
 
   unique_ptr<Tiling> tiling = Tiling::Create(
       tiling_type,

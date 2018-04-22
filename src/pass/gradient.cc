@@ -274,20 +274,18 @@ Graph Gradient(Graph src) {
       }
     }
   }
-  std::vector<IndexedGraph::NodeEntry> fwdoutputs;
+  std::vector<IndexedGraph::NodeEntry> fwdoutputs, bwdoutputs;
   for (const auto& ent : src.outputs) {
     fwdoutputs.push_back(idxgraph.get_index_entry(ent));
+  }
+  for (uint32_t i = src.outputs.size(); i < ret.outputs.size(); ++i) {
+    bwdoutputs.push_back(idxgraph.get_index_entry(ret.outputs[i]));
   }
 
   ret.attrs["fwdent2bwdview"] = std::make_shared<any>(std::move(fwdent2bwdview));
   ret.attrs["fwdnode2bwdview"] = std::make_shared<any>(std::move(fwdnode2bwdview));
   ret.attrs["fwdoutputs"] = std::make_shared<any>(std::move(fwdoutputs));
-
-  MegaGraph mg(&ret);
-  mg.Print();
-  //mg.MergeElementwise();
-
-  LOG(FATAL) << "!!!!!";
+  ret.attrs["bwdoutputs"] = std::make_shared<any>(std::move(bwdoutputs));
 
   return ret;
 }

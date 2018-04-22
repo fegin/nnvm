@@ -151,12 +151,31 @@ class MegaGraph {
 
   void MergeWeightAndGradients();
 
+  void MergeRNNSteps();
+
+  const std::vector<std::pair<uint32_t, uint32_t>>& entry_equals() const {
+    return entry_equals_;
+  }
+
  private:
   bool IsElementWise(uint32_t nid);
 
  private:
+  enum class MapType {
+    kNA,
+    kMapToNode,
+    kMapToEntry,
+  };
+
   Graph graph_;
   Graph* orig_graph_;
+
+  // array of length num_nodes(orig_graph_)
+  std::vector<MapType> orignode_mapping_type_;
+  std::vector<nnvm::any> orignode_mappings_;
+  // array of length num_node_entries(orig_graph_)
+  std::vector<MapType> origentry_mapping_type_;
+  std::vector<nnvm::any> origentry_mappings_;
 
   std::unordered_map<const Node*, uint32_t> num_outputs_;
 
@@ -170,7 +189,8 @@ class MegaGraph {
   // the meta graph entry_id to its associated entry group.
   std::unordered_map<const Node*, std::vector<GraphView>> entry_mappings_;
 
-  std::vector<std::pair<uint32_t, uint32_t>> equals_;
+  std::vector<std::pair<uint32_t, uint32_t>> entry_equals_;
+  std::vector<std::pair<uint32_t, uint32_t>> node_equals_;
 };
 
 }  // namespace pass
