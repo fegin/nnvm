@@ -64,13 +64,13 @@ class CutAlgorithm : public Tiling {
   cost_t KEqualCuts(uint32_t K);
 
   // Get schemes of a node entry.
-  const std::vector<Scheme>& GetEntrySchemes(uint32_t entry_id) const override;
+  std::vector<Scheme> GetEntrySchemes(uint32_t entry_id) const override;
   
   // Get scheme requests of the given node.
-  const std::vector<SchemeRequest>& GetSchemeRequests(uint32_t node_id) const override;
+  std::vector<SchemeRequest> GetSchemeRequests(uint32_t node_id) const override;
 
   // Get scheme requests chosen for the given node.
-  const std::vector<size_t>& GetChosenSchemeRequests(uint32_t node_id) const override;
+  std::vector<size_t> GetChosenSchemeRequests(uint32_t node_id) const override;
 
   void Run() override;
 

@@ -58,6 +58,12 @@ using FAlignedSchemes = std::function<std::vector<SchemeRequest>(
     const std::vector<TShape>& output_shapes)>;
 
 std::ostream& operator << (std::ostream& os, const Scheme& sch);
+inline bool operator == (const Scheme& s1, const Scheme& s2) {
+  return s1.type == s2.type && (s1.type != Scheme::kCut || s1.dim == s2.dim);
+}
+inline bool operator != (const Scheme& s1, const Scheme& s2) {
+  return !(s1 == s2);
+}
 
 }  // namespace pass
 }  // namespace nnvm

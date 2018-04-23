@@ -814,6 +814,7 @@ void MegaGraph::MergeRNNSteps() {
               });
       }
     }
+    //LOG(INFO) << kv.first << " " << ns.size();
     if (ns.size() > max_step_len) {
       max_step_len = ns.size();
     }
@@ -822,7 +823,17 @@ void MegaGraph::MergeRNNSteps() {
   const size_t num_steps = step_with_bp.size();
   // 3. Build equals
   for (size_t t = 0; t < max_step_len; ++t) {
-    uint32_t anchor = step_with_bp[0][t];
+    uint32_t anchor = origidx.num_nodes();
+    for (size_t s = 0; s < num_steps; ++s) {
+      // NOTE: not all the RNN steps are identical to each other. For example, the hidden
+      // state of the last step will no longer be fed to another step. Here we only merge
+      // nodes that are available to the steps.
+      if (t < step_with_bp[s].size()) {
+        anchor = step_with_bp[s][t];
+        break;
+      }
+    }
+    CHECK(anchor < origidx.num_nodes());
     const Node* anode = origidx[anchor].source;
     for (size_t s = 1; s < num_steps; ++s) {
       if (t >= step_with_bp[s].size()) {

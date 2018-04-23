@@ -639,12 +639,12 @@ Graph GraphPartitioner::Run() {
     vector<Grid> input_grids, output_grids;
     CHECK_EQ(node->inputs.size(), num_inputs);
     CHECK_EQ(node->num_outputs(), num_outputs);
-    for (size_t i = 0; i < num_inputs; ++i) {
+    for (size_t i = 0; i < node->inputs.size(); ++i) {
       const uint32_t in_ent_id = graph.entry_id(node->inputs[i]);
       const TShape& shape = shapes[in_ent_id];
       input_grids.emplace_back(shape, input_schemes[i]);
     }
-    for (size_t i = 0; i < num_outputs; ++i) {
+    for (size_t i = 0; i < node->num_outputs(); ++i) {
       const uint32_t out_ent_id = graph.entry_id(nodeid, i);
       const TShape& shape = shapes[out_ent_id];
       output_grids.emplace_back(shape, output_schemes[i]);
@@ -675,12 +675,12 @@ Graph GraphPartitioner::Run() {
         n->control_deps.push_back(splitted_nodes[in_node_id][i]);
       }
       // TODO(minjie): Original control dependencies are ignored.
-      /*
       for (NodePtr depend_node : node->control_deps) {
         const uint32_t depend_nid = graph.node_id(depend_node.get());
         CHECK_LT(depend_nid, nodeid);
         n->control_deps.push_back(splitted_nodes[depend_nid][i]);
-      }*/
+        //LOG(INFO) << "Ignored control dep from " << node->attrs.name << " -> " << depend_node->attrs.name;
+      }
       AssignDevice(n, i);
       FinalizeNodeCreation(n);
       splitted_nodes[nodeid].push_back(n);

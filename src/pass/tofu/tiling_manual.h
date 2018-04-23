@@ -14,10 +14,10 @@ namespace pass {
 class ManualTiling : public Tiling {
  public:
   ManualTiling(Graph* src, const NodeEntryGroups& groups, size_t num_devices);
-  const std::vector<size_t>& GetChosenSchemeRequests(uint32_t node_id) const override {
+  std::vector<size_t> GetChosenSchemeRequests(uint32_t node_id) const override {
     return chosen_scheme_requests_.at(node_id);
   }
-  const std::vector<SchemeRequest>& GetSchemeRequests(uint32_t node_id) const override {
+  std::vector<SchemeRequest> GetSchemeRequests(uint32_t node_id) const override {
     return aligned_scheme_requests_.at(node_id);
   }
  protected:
@@ -34,7 +34,7 @@ class ManualTiling : public Tiling {
 class DataParallelism : public ManualTiling {
  public:
   DataParallelism(Graph* src, const NodeEntryGroups& groups, size_t num_devices);
-  const std::vector<Scheme>& GetEntrySchemes(uint32_t entry_id) const override;
+  std::vector<Scheme> GetEntrySchemes(uint32_t entry_id) const override;
   void Run() override {}
   
  private:
@@ -46,7 +46,7 @@ class DataParallelism : public ManualTiling {
 class ModelParallelism : public ManualTiling {
  public:
   ModelParallelism(Graph* src, const NodeEntryGroups& groups, size_t num_devices);
-  const std::vector<Scheme>& GetEntrySchemes(uint32_t entry_id) const override;
+  std::vector<Scheme> GetEntrySchemes(uint32_t entry_id) const override;
   void Run() override {}
 
  private:
@@ -59,7 +59,7 @@ class ModelParallelism : public ManualTiling {
 class HybridParallelism : public ManualTiling {
  public:
   HybridParallelism(Graph* src, const NodeEntryGroups& groups, size_t num_devices);
-  const std::vector<Scheme>& GetEntrySchemes(uint32_t entry_id) const override {
+  std::vector<Scheme> GetEntrySchemes(uint32_t entry_id) const override {
     return *entry_schemes_[entry_id];
   }
   void Run() override {}
@@ -76,7 +76,7 @@ class HybridParallelism : public ManualTiling {
 class UserTiling : public ManualTiling {
  public:
   UserTiling(Graph* src, const NodeEntryGroups& groups, size_t num_devices);
-  const std::vector<Scheme>& GetEntrySchemes(uint32_t entry_id) const override {
+  std::vector<Scheme> GetEntrySchemes(uint32_t entry_id) const override {
     return entry_schemes_[entry_id];
   }
   void Run() override {}

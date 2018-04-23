@@ -19,15 +19,15 @@ class SpartanTiling : public Tiling {
   void Run() override;
 
   // Get schemes of a node entry.
-  const std::vector<Scheme>& GetEntrySchemes(uint32_t entry_id) const override {
+  std::vector<Scheme> GetEntrySchemes(uint32_t entry_id) const override {
     return entry_schemes_[entry_id];
   }
   // Get scheme requests of the given node.
-  const std::vector<SchemeRequest>& GetSchemeRequests(uint32_t node_id) const override {
+  std::vector<SchemeRequest> GetSchemeRequests(uint32_t node_id) const override {
     return scheme_requests_[node_id];
   }
   // Get scheme requests chosen for the given node.
-  const std::vector<size_t>& GetChosenSchemeRequests(uint32_t node_id) const override {
+  std::vector<size_t> GetChosenSchemeRequests(uint32_t node_id) const override {
     return chosen_scheme_requests_[node_id];
   }
 

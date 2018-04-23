@@ -9,6 +9,7 @@
 #include <nnvm/op_attr_types.h>
 #include <memory>
 #include "./graph_algorithm.h"
+#include "./tofu/utils.h"
 
 namespace nnvm {
 namespace pass {
@@ -79,6 +80,15 @@ class GraphAllocator {
     size_t total = 0;
     for (auto &p : data_) {
       total += p->max_bytes;
+    }
+    return total;
+  }
+  size_t TotalAllocBytesDevice(int device_id) const {
+    size_t total = 0;
+    for (auto &p : data_) {
+      if (p->device_id == device_id) {
+        total += p->max_bytes;
+      }
     }
     return total;
   }
@@ -219,6 +229,7 @@ Graph PlanMemoryGraphColoring(Graph ret) {
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     const auto& inode = idx[nid];
     if (inode.source->is_variable()) continue;
+    //if (utils::StartsWith(inode.source->attrs.name, "_TOFU_CONVERT")) continue;
     // check inplace option
     if (finplace_option.count(inode.source->op()) != 0) {
       auto inplace_pairs = finplace_option[inode.source->op()](inode.source->attrs);
@@ -294,15 +305,23 @@ Graph PlanMemoryGraphColoring(Graph ret) {
     }
   }
   size_t bad_alloc_bytes = 0, extern_alloc_bytes = 0;
+  size_t tofu_recv_buffer_bytes = 0;
   for (const auto& kv : storage2entry) {
-    //LOG(INFO) << "Storage#" << kv.first << ": [";
+    LOG(INFO) << "Storage#" << kv.first << ": [";
     size_t size_sum = 0;
+    bool only_tofu_convert = true;
     for (const auto& e : kv.second) {
-      //LOG(INFO) << "\t" << idx[e.first].source->attrs.name << "#" << e.second;
+      LOG(INFO) << "\t" << idx[e.first].source->attrs.name << "#" << e.second;
       const uint32_t eid = idx.entry_id(e.first, e.second);
       size_sum += shape_vec[eid].Size();
+      if (!utils::StartsWith(idx[e.first].source->attrs.name, "_TOFU_CONVERT")) {
+        only_tofu_convert = false;
+      }
     }
-    //LOG(INFO) << "] bytes=" << allocator.Bytes(kv.first);
+    LOG(INFO) << "] bytes=" << allocator.Bytes(kv.first);
+    if (only_tofu_convert) {
+      tofu_recv_buffer_bytes += allocator.Bytes(kv.first);
+    }
     if (kv.first == GraphAllocator::kBadStorageID) {
       bad_alloc_bytes = size_sum * 4;
     } else if (kv.first == GraphAllocator::kExternalStorageID) {
@@ -310,8 +329,13 @@ Graph PlanMemoryGraphColoring(Graph ret) {
     }
   }
   LOG(INFO) << "Total allocated bytes: " << allocator.TotalAllocBytes();
+  LOG(INFO) << "Total allocated bytes(device#0): " << allocator.TotalAllocBytesDevice(0);
+  LOG(INFO) << "Total allocated bytes(device#1): " << allocator.TotalAllocBytesDevice(1);
+  LOG(INFO) << "Total allocated bytes(device#2): " << allocator.TotalAllocBytesDevice(2);
+  LOG(INFO) << "Total allocated bytes(device#3): " << allocator.TotalAllocBytesDevice(3);
   LOG(INFO) << "Total bad alloc bytes: " << bad_alloc_bytes;
   LOG(INFO) << "Total extern alloc bytes: " << extern_alloc_bytes;
+  LOG(INFO) << "Total tofu recv buf bytes: " << tofu_recv_buffer_bytes;
 
   ret.attrs["storage_id"] = std::make_shared<any>(std::move(storage));
   ret.attrs["storage_inplace_index"] = std::make_shared<any>(std::move(storage_inplace_index));

@@ -128,7 +128,7 @@ DataParallelism::DataParallelism(Graph* src, const NodeEntryGroups& groups, size
   }
 }
 
-const std::vector<Scheme>& DataParallelism::GetEntrySchemes(uint32_t entry_id) const {
+std::vector<Scheme> DataParallelism::GetEntrySchemes(uint32_t entry_id) const {
   return *entry_schemes_[entry_id];
 }
 
@@ -182,7 +182,7 @@ ModelParallelism::ModelParallelism(Graph* src, const NodeEntryGroups& groups, si
   }
 }
 
-const std::vector<Scheme>& ModelParallelism::GetEntrySchemes(uint32_t entry_id) const {
+std::vector<Scheme> ModelParallelism::GetEntrySchemes(uint32_t entry_id) const {
   return *entry_schemes_[entry_id];
 }
 

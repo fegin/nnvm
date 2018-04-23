@@ -342,9 +342,9 @@ Graph PlaceDevice(Graph src) {
   if (src.attrs.count("dtype") != 0) {
     RemapEntryAttributes<int>(src, &ret, new_node_map, "dtype");
   }
-  for (size_t i = 0; i < ret.indexed_graph().num_nodes(); ++i) {
-    LOG(INFO) << "Node #" << i << " " << ret.indexed_graph()[i].source->attrs.name << " on " << new_device_vec[i];
-  }
+  //for (size_t i = 0; i < ret.indexed_graph().num_nodes(); ++i) {
+    //LOG(INFO) << "Node #" << i << " " << ret.indexed_graph()[i].source->attrs.name << " on " << new_device_vec[i];
+  //}
 
   // Generate dot graph.
   //PlotGraph(ret, new_device_vec);

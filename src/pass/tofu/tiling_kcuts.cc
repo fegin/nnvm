@@ -42,21 +42,32 @@ vector<const T*> ExtractFromIndex(
 
 // Change the given scheme to a new one. Return false if all the possible schemes have
 // been iterated.
+//bool NextScheme(const TShape& shape, Scheme* scheme) {
+//  CHECK_NE(scheme->type, Scheme::kRed);
+//  if (scheme->type == Scheme::kRep) {
+//    return false;
+//  }
+//  CHECK_EQ(scheme->type, Scheme::kCut);
+//  CHECK_GE(scheme->dim, 0);
+//  if (scheme->dim + 1 < shape.ndim() && scheme->dim + 1 < 2) { 
+//    // TODO(minjie): currently only consider partition on first two dimensions.
+//    ++scheme->dim;
+//  } else {
+//    scheme->dim = -1;
+//    scheme->type = Scheme::kRep;
+//  }
+//  return true;
+//}
 bool NextScheme(const TShape& shape, Scheme* scheme) {
-  CHECK_NE(scheme->type, Scheme::kRed);
-  if (scheme->type == Scheme::kRep) {
-    return false;
-  }
   CHECK_EQ(scheme->type, Scheme::kCut);
   CHECK_GE(scheme->dim, 0);
   if (scheme->dim + 1 < shape.ndim() && scheme->dim + 1 < 2) { 
     // TODO(minjie): currently only consider partition on first two dimensions.
     ++scheme->dim;
+    return true;
   } else {
-    scheme->dim = -1;
-    scheme->type = Scheme::kRep;
+    return false;
   }
-  return true;
 }
 
 bool NextSchemeVec(const vector<DPEntry>& entries, vector<Scheme>* schvec) {
@@ -146,19 +157,40 @@ CutAlgorithm::CutAlgorithm(Graph* src,
   Init();
 }
 
-const std::vector<Scheme>& CutAlgorithm::GetEntrySchemes(uint32_t entry_id) const {
+std::vector<Scheme> CutAlgorithm::GetEntrySchemes(uint32_t entry_id) const {
   const Levels::Index& index = levels_.GetNodeEntryIndex(entry_id);
   return dp_entries_[index.first][index.second].chosen_schemes;
 }
 
-const std::vector<SchemeRequest>& CutAlgorithm::GetSchemeRequests(
+std::vector<SchemeRequest> CutAlgorithm::GetSchemeRequests(
     uint32_t node_id) const {
   const Levels::Index& index = levels_.GetNodeIndex(node_id);
-  return dp_operators_[index.first][index.second].aligned_requests;
+  auto allreqs = dp_operators_[index.first][index.second].aligned_requests;
+  const auto& idx = src_graph_->indexed_graph();
+  const Node* node = idx[node_id].source;
+  if (node->inputs.size() != allreqs[0].input_schemes.size()) {
+    // This means there are two (elementwise) operators with different
+    // number of inputs being grouped together and only one of them
+    // is used for cost computation.
+    for (auto& req : allreqs) {
+      CHECK(utils::AllSame(req.input_schemes));
+      req.input_schemes.resize(node->inputs.size(), req.input_schemes[0]);
+    }
+  }
+  if (node->num_outputs() != allreqs[0].output_schemes.size()) {
+    // This means there are two (elementwise) operators with different
+    // number of outputs being grouped together and only one of them
+    // is used for cost computation.
+    for (auto& req : allreqs) {
+      CHECK(utils::AllSame(req.output_schemes));
+      req.output_schemes.resize(node->num_outputs(), req.output_schemes[0]);
+    }
+  }
+  return allreqs;
 }
 
 // Get scheme requests chosen for the given node.
-const std::vector<size_t>& CutAlgorithm::GetChosenSchemeRequests(
+std::vector<size_t> CutAlgorithm::GetChosenSchemeRequests(
     uint32_t node_id) const {
   const Levels::Index& index = levels_.GetNodeIndex(node_id);
   return dp_operators_[index.first][index.second].chosen_aligned_requests;
@@ -366,12 +398,17 @@ void CutAlgorithm::Print() const {
       const uint32_t groupid = dp_op.node_group_id;
       ostringstream oss;
       oss << "\t{";
+      int c = 0;
       for (const uint32_t nodeid : node_groups_[groupid]) {
         const Node* node = graph[nodeid].source;
-        oss << "#" << nodeid << ": \"" << node->attrs.name << "\""
-            << (node->is_variable()? "(variable)" : "");
+        oss << "#" << nodeid << "(" << node->attrs.name << ")"
+            << (node->is_variable()? "(variable)" : "") << " ";
+        if (++c == 3) {
+          oss << "...";
+          break;
+        }
       }
-      oss << " [";
+      oss << "}, [";
       for (size_t choseid : dp_op.chosen_aligned_requests) {
         oss << choseid << " ";
       }
@@ -385,8 +422,13 @@ void CutAlgorithm::Print() const {
         const uint32_t groupid = dp_ent.entry_group_id;
         ostringstream oss;
         oss << "\t{";
+        int c = 0;
         for (const uint32_t entid : entry_groups_[groupid]) {
           oss << "#" << entid << " ";
+          if (++c == 3) {
+            oss << "...";
+            break;
+          }
         }
         oss << "}, " << dp_ent.region << "[";
         for (const Scheme& sch : dp_ent.chosen_schemes) {

@@ -60,6 +60,15 @@ inline std::vector<uint32_t> UnionFind(
   return groups;
 }
 
+template<typename T>
+inline bool AllSame(const std::vector<T>& vec) {
+  if (vec.empty()) return false;
+  for (const T& t : vec) {
+    if (t != vec[0]) return false;
+  }
+  return true;
+}
+
 }  // namespace utils
 }  // namespace pass
 }  // namespace nnvm

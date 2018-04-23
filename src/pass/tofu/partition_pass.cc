@@ -95,7 +95,7 @@ Graph PartitionPass(Graph src) {
   //}
 
   MegaGraph mg(&src);
-  mg.Print();
+  //mg.Print();
   mg.MergeElementwise();
   mg.MergeWeightAndGradients();
   mg.MergeRNNSteps();

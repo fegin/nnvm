@@ -22,11 +22,11 @@ class Tiling {
   // (optional) Print the tiling result.
   virtual void Print() const { }
   // Get schemes of a node entry.
-  virtual const std::vector<Scheme>& GetEntrySchemes(uint32_t entry_id) const = 0;
+  virtual std::vector<Scheme> GetEntrySchemes(uint32_t entry_id) const = 0;
   // Get scheme requests of the given node.
-  virtual const std::vector<SchemeRequest>& GetSchemeRequests(uint32_t node_id) const = 0;
+  virtual std::vector<SchemeRequest> GetSchemeRequests(uint32_t node_id) const = 0;
   // Get scheme requests chosen for the given node.
-  virtual const std::vector<size_t>& GetChosenSchemeRequests(uint32_t node_id) const = 0;
+  virtual std::vector<size_t> GetChosenSchemeRequests(uint32_t node_id) const = 0;
 
   static std::unique_ptr<Tiling> Create(
       const std::string& name,
@@ -65,13 +65,13 @@ class MergeTiling : public Tiling {
       }
     }
   }
-  const std::vector<Scheme>& GetEntrySchemes(uint32_t entry_id) const {
+  std::vector<Scheme> GetEntrySchemes(uint32_t entry_id) const {
     return entry_schemes_.at(entry_id);
   }
-  const std::vector<SchemeRequest>& GetSchemeRequests(uint32_t node_id) const {
+  std::vector<SchemeRequest> GetSchemeRequests(uint32_t node_id) const {
     return scheme_requests_.at(node_id);
   }
-  const std::vector<size_t>& GetChosenSchemeRequests(uint32_t node_id) const {
+  std::vector<size_t> GetChosenSchemeRequests(uint32_t node_id) const {
     return chosen_scheme_requests_.at(node_id);
   }
  private:
