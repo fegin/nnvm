@@ -116,6 +116,7 @@ Graph PartitionPass(Graph src) {
       *lvls,
       groups,
       num_devices);
+  tiling->Run();
   tiling->Print();
   if (oversharding) {
     LOG(INFO) << "Oversharding enabled";
