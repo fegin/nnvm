@@ -23,9 +23,13 @@ string GetPrefix(const string& str) {
 }  // namespace
 
 NodeEntryGroups::NodeEntryGroups(
-    uint32_t num_node_entries,
+    const Graph& graph,
     const std::vector<std::pair<uint32_t, uint32_t>>& equals)
-  : groups_(num_node_entries), entry2group_(num_node_entries) {
+  : graph_(graph) {
+  const auto& idx = graph.indexed_graph();
+  uint32_t num_node_entries = idx.num_node_entries();
+  groups_.resize(num_node_entries);
+  entry2group_.resize(num_node_entries);
   // Union-find
   vector<uint32_t> groups(num_node_entries);
   for (uint32_t eid = 0; eid < num_node_entries; ++eid) {
@@ -48,29 +52,95 @@ NodeEntryGroups::NodeEntryGroups(
     entry2group_[eid] = g;
     groups_[g].insert(eid);
   }
-  for (uint32_t eid = 0; eid < num_node_entries; ++eid) {
-    cout << "Entry#" << eid << ": group#" << entry2group_[eid] << endl;
-  }
-  for (uint32_t gid = 0; gid < num_node_entries; ++gid) {
-    cout << "Group#" << gid << " {";
-    for (const auto& x : groups_[gid]) {
-      cout << x << " ";
+}
+
+void NodeEntryGroups::Print() const {
+  const auto& idx = graph_.indexed_graph();
+  vector<string> ename(idx.num_node_entries());
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    const Node* node = idx[nid].source;
+    for (uint32_t i = 0; i < node->num_outputs(); ++i) {
+      uint32_t eid = idx.entry_id(nid, i);
+      ename[eid] = node->attrs.name + "#" + std::to_string(i);
     }
-    cout << "}" << endl;
   }
+  size_t ngroups = 0;
+  for (uint32_t gid = 0; gid < idx.num_node_entries(); ++gid) {
+    if (groups_[gid].empty()) continue;
+    ++ngroups;
+    LOG(INFO) << "Group#" << gid << "[";
+    for (const auto& eid : groups_[gid]) {
+      LOG(INFO) << "\t" << ename[eid];
+    }
+    LOG(INFO) << "]";
+  }
+  LOG(INFO) << "#Entry groups: " << ngroups;
+}
+
+NodeGroups::NodeGroups(
+    const Graph& graph,
+    const std::vector<std::pair<uint32_t, uint32_t>>& equals)
+  : graph_(graph) {
+  const auto& idx = graph.indexed_graph();
+  uint32_t num_nodes = idx.num_nodes();
+  groups_.resize(num_nodes);
+  node2group_.resize(num_nodes);
+  // Union-find
+  vector<uint32_t> groups(num_nodes);
+  for (uint32_t nid = 0; nid < num_nodes; ++nid) {
+    groups[nid] = nid;
+  }
+  for (const auto& eq : equals) {
+    uint32_t g1 = eq.first;
+    uint32_t g2 = eq.second;
+    while (groups[g1] != g1) g1 = groups[g1];
+    while (groups[g2] != g2) g2 = groups[g2];
+    const uint32_t group = std::min(g1, g2);
+    groups[g1] = group;
+    groups[g2] = group;
+    groups[eq.first] = group;
+    groups[eq.second] = group;
+  }
+  for (uint32_t nid = 0; nid < num_nodes; ++nid) {
+    uint32_t g = groups[nid];
+    while (g != groups[g]) g = groups[g];
+    node2group_[nid] = g;
+    groups_[g].insert(nid);
+  }
+}
+
+void NodeGroups::Print() const {
+  const auto& idx = graph_.indexed_graph();
+  size_t ngroups = 0;
+  for (uint32_t gid = 0; gid < idx.num_nodes(); ++gid) {
+    if (groups_[gid].empty()) continue;
+    ++ngroups;
+    LOG(INFO) << "Group#" << gid << "[";
+    for (const auto& nid : groups_[gid]) {
+      LOG(INFO) << "\t" << idx[nid].source->attrs.name;
+    }
+    LOG(INFO) << "]";
+  }
+  LOG(INFO) << "#Node groups: " << ngroups;
 }
 
 void Levels::AddNode(uint32_t levelid, uint32_t nodeid) {
   CHECK(node2index_.find(nodeid) == node2index_.end())
     << "Node #" << nodeid << " has already been added to level #" << levelid;
-  if (levelid >= node_levels_.size()) {
+  if (levelid >= node_group_levels_.size()) {
     // New level.
-    node_levels_.push_back(vector<uint32_t>());
+    node_group_levels_.push_back(vector<uint32_t>());
   }
-  CHECK_LT(levelid, node_levels_.size());
-  const uint32_t level_index = node_levels_[levelid].size();
-  node_levels_[levelid].push_back(nodeid);
-  node2index_[nodeid] = make_pair(levelid, level_index);
+  CHECK_LT(levelid, node_group_levels_.size());
+  const uint32_t level_index = node_group_levels_[levelid].size();
+  const uint32_t node_group_id = node_groups_->group_id(nodeid);
+  node_group_levels_[levelid].push_back(node_group_id);
+  // For all node in the same group, make its index.
+  for (const uint32_t node : (*node_groups_)[node_group_id]) {
+    CHECK(!node2index_.count(node))
+      << "Node should not be added twice (" << node << ").";
+    node2index_[node] = make_pair(levelid, level_index);
+  }
 }
 
 void Levels::AddNodeEntry(uint32_t levelid, uint32_t entry_id) {
@@ -86,7 +156,7 @@ void Levels::AddNodeEntry(uint32_t levelid, uint32_t entry_id) {
   const uint32_t level_index = entry_group_levels_[levelid].size();
   const uint32_t entry_group_id = entry_groups_->group_id(entry_id);
   entry_group_levels_[levelid].push_back(entry_group_id);
-  // For all entry in the group, make its index.
+  // For all entry in the same group, make its index.
   for (const uint32_t ent : (*entry_groups_)[entry_group_id]) {
     CHECK(entry2index_.find(ent) == entry2index_.end())
       << "Entry should not be added twice (" << ent << ").";
@@ -95,85 +165,86 @@ void Levels::AddNodeEntry(uint32_t levelid, uint32_t entry_id) {
 }
 
 void Levels::RemoveExtraNodeLevel() {
-  if (node_levels_.size() > entry_group_levels_.size()) {
+  if (node_group_levels_.size() > entry_group_levels_.size()) {
     // If the last level is a node level, it can be merged
     // with the second last one.
-    const size_t old_size = node_levels_.size();
-    const auto& last_lvl = node_levels_[old_size - 1];
-    for (const uint32_t nid : last_lvl) {
-      const size_t level_idx = node_levels_[old_size - 2].size();
-      node_levels_[old_size - 2].push_back(nid);
-      node2index_[nid] = std::make_pair(old_size - 2, level_idx);
+    const size_t old_size = node_group_levels_.size();
+    const auto& last_lvl = node_group_levels_[old_size - 1];
+    for (const uint32_t gid : last_lvl) {
+      const size_t level_idx = node_group_levels_[old_size - 2].size();
+      node_group_levels_[old_size - 2].push_back(gid);
+      for (const uint32_t nid : (*node_groups_)[gid]) {
+        node2index_[nid] = std::make_pair(old_size - 2, level_idx);
+      }
     }
-    node_levels_.resize(old_size - 1);
+    node_group_levels_.resize(old_size - 1);
   }
-  CHECK_EQ(node_levels_.size(), entry_group_levels_.size());
+  CHECK_EQ(node_group_levels_.size(), entry_group_levels_.size());
 }
 
-BFS::BFS(Graph* src, const NodeEntryGroups* groups): Levels(groups), src_graph_(src) {
+BFS::BFS(Graph* src, const NodeEntryGroups* entry_group, const NodeGroups* node_group):
+  Levels(entry_group, node_group), src_graph_(src) {
   const IndexedGraph& graph = src_graph_->indexed_graph();
-  entry_to_nodes_.resize(graph.num_node_entries());
-  node_to_entries_.resize(graph.num_nodes());
-  for (uint32_t node_id = 0; node_id < graph.num_nodes(); ++node_id) {
-    const IndexedGraph::Node& node = graph[node_id];
-    // For all input entries, put the node in the adj list.
-    for (const IndexedGraph::NodeEntry& in_ent : node.inputs) {
-      const uint32_t in_ent_id = graph.entry_id(in_ent);
-      entry_to_nodes_[in_ent_id].insert(node_id);
-      node_to_entries_[node_id].insert(in_ent_id);
-      // Also put all the entries in the same group in the map.
-      for (const uint32_t peer : (*groups)[groups->group_id(in_ent_id)]) {
-        entry_to_nodes_[peer].insert(node_id);
-        node_to_entries_[node_id].insert(peer);
+  for (uint32_t v = 0; v < graph.num_nodes(); ++v) {
+    uint32_t ng = node_groups_->group_id(v);
+    unordered_set<uint32_t> neigh_eg;
+    for (uint32_t node_id : (*node_groups_)[ng]) {
+      const auto& node = graph[node_id];
+      // For all input entries, put the node in the adj list.
+      for (const auto& in_ent : node.inputs) {
+        const uint32_t in_ent_id = graph.entry_id(in_ent);
+        neigh_eg.insert(entry_groups_->group_id(in_ent_id));
+      }
+      // For all output entries, put the node in the adj list.
+      for (uint32_t outidx = 0; outidx < node.source->num_outputs(); ++outidx) {
+        const uint32_t out_ent_id = graph.entry_id(node_id, outidx);
+        neigh_eg.insert(entry_groups_->group_id(out_ent_id));
       }
     }
-    // For all output entries, put the node in the adj list.
-    for (uint32_t outidx = 0; outidx < node.source->num_outputs(); ++outidx) {
-      const uint32_t out_ent_id = graph.entry_id(node_id, outidx);
-      entry_to_nodes_[out_ent_id].insert(node_id);
-      node_to_entries_[node_id].insert(out_ent_id);
-      // Also put all the entries in the same group in the map.
-      for (const uint32_t peer : (*groups)[groups->group_id(out_ent_id)]) {
-        entry_to_nodes_[peer].insert(node_id);
-        node_to_entries_[node_id].insert(peer);
-      }
+    for (uint32_t eg : neigh_eg) {
+      eg2ng_[eg].insert(ng);
+      ng2eg_[ng].insert(eg);
     }
   }
 }
 
-void BFS::Run(uint32_t start_node_id) {
-  queue<pair<uint32_t, uint32_t>> queue;  // (level, id)
-  queue.push(make_pair(0, start_node_id));
-  unordered_set<uint32_t> visited_nodes, visited_entries;
+void BFS::Run(std::vector<uint32_t> start_node_id) {
+  queue<pair<uint32_t, uint32_t>> queue;  // (level, gid)
+  unordered_set<uint32_t> visited_ng, visited_eg;
+  for (uint32_t nid : start_node_id) {
+    queue.push(make_pair(0, node_groups_->group_id(nid)));
+    visited_ng.insert(node_groups_->group_id(nid));
+  }
   while (!queue.empty()) {
-    uint32_t level = 0, id = 0;
-    tie(level, id) = queue.front();
+    uint32_t level = 0, gid = 0;
+    tie(level, gid) = queue.front();
     queue.pop();
 
     if (level % 2 == 0) {
-      if (visited_nodes.count(id) > 0) {
-        continue;
-      }
       // This is a Node.
-      visited_nodes.insert(id);
-      AddNode(level / 2, id);
-      // Put all its input/output entries into queue.
-      for (const uint32_t ent_id : node_to_entries_[id]) {
-        if (visited_entries.count(ent_id) == 0) {
-          queue.push(make_pair(level + 1, ent_id));
+      for (const uint32_t nid : (*node_groups_)[gid]) {
+        AddNode(level / 2, nid);
+        break;  // Only add one node is enough. The rest will be added automatically.
+      }
+      // Put all its input/output entrie groups into queue.
+      for (const uint32_t eg : ng2eg_[gid]) {
+        if (visited_eg.count(eg) == 0) {
+          queue.push(make_pair(level + 1, eg));
+          visited_eg.insert(eg);
         }
       }
     } else {
-      if (visited_entries.count(id) > 0) {
-        continue;
-      }
       // This is a NodeEntry.
-      visited_entries.insert(id);
-      AddNodeEntry(level / 2, id);
+      visited_eg.insert(gid);
+      for (const uint32_t eid : (*entry_groups_)[gid]) {
+        AddNodeEntry(level / 2, eid);
+        break;  // Only add one entry is enough. The rest will be added automatically.
+      }
       // Put all its producers/consumers into queue.
-      for (const uint32_t node_id : entry_to_nodes_[id]) {
-        if (visited_nodes.count(node_id) == 0) {
-          queue.push(make_pair(level + 1, node_id));
+      for (const uint32_t ng : eg2ng_[gid]) {
+        if (visited_ng.count(ng) == 0) {
+          queue.push(make_pair(level + 1, ng));
+          visited_ng.insert(ng);
         }
       }
     }
@@ -184,7 +255,7 @@ void BFS::Run(uint32_t start_node_id) {
 void BFS::Print() const {
   const IndexedGraph& graph = src_graph_->indexed_graph();
   const ShapeVector& shapes = src_graph_->GetAttr<ShapeVector>("shape");
-  LOG(INFO) << "NodeEntry To Node";
+  /*LOG(INFO) << "NodeEntry To Node";
   for (uint32_t entid = 0; entid < entry_to_nodes_.size(); ++entid) {
     ostringstream oss;
     oss << "Entry#" << entid << ": ";
@@ -192,13 +263,18 @@ void BFS::Print() const {
       oss << nodeid << " ";
     }
     LOG(INFO) << oss.str();
-  }
-  for (size_t i = 0; i < node_levels_.size(); ++i) {
+  }*/
+  for (size_t i = 0; i < node_group_levels_.size(); ++i) {
     LOG(INFO) << "Level Node: [";
-    for (uint32_t nodeid : node_levels_[i]) {
-      const Node* node = graph[nodeid].source;
-      LOG(INFO) << "\t#" << nodeid << ": \"" << node->attrs.name << "\""
-                << (node->is_variable()? "(variable)" : "");
+    for (const uint32_t groupid : node_group_levels_[i]) {
+      ostringstream oss;
+      oss << "\t{";
+      for (const uint32_t nodeid : (*node_groups_)[groupid]) {
+        const Node* node = graph[nodeid].source;
+        oss << "#" << nodeid << ": \"" << node->attrs.name << "\""
+                  << (node->is_variable()? "(variable)" : "") << ", ";
+      }
+      LOG(INFO) << oss.str() << "},";
     }
     LOG(INFO) << "]";
     if (i < entry_group_levels_.size()) {
@@ -214,10 +290,10 @@ void BFS::Print() const {
       LOG(INFO) << "]";
     }
   }
-  LOG(INFO) << "#Levels: " << node_levels_.size();
+  LOG(INFO) << "#Levels: " << node_group_levels_.size();
 }
 
-NeuralLevels::NeuralLevels(Graph* src, const NodeEntryGroups* groups):
+/*NeuralLevels::NeuralLevels(Graph* src, const NodeEntryGroups* groups):
   Levels(groups), src_graph_(src) {
   // Create node groups.
   const IndexedGraph& graph = src_graph_->indexed_graph();
@@ -245,13 +321,13 @@ NeuralLevels::NeuralLevels(Graph* src, const NodeEntryGroups* groups):
     nodeid2group_[nodeid] = groupid;
     node_groups_[groupid].push_back(nodeid);
   }
-  /*for (size_t i = 0; i < node_groups_.size(); ++i) {
-    LOG(INFO) << "Group #" << i << ": {";
-    for (uint32_t nodeid : node_groups_[i]) {
-      LOG(INFO) << "\t#" << nodeid << ": " << graph[nodeid].source->attrs.name << ",";
-    }
-    LOG(INFO) << "}";
-  }*/
+  //for (size_t i = 0; i < node_groups_.size(); ++i) {
+  //  LOG(INFO) << "Group #" << i << ": {";
+  //  for (uint32_t nodeid : node_groups_[i]) {
+  //    LOG(INFO) << "\t#" << nodeid << ": " << graph[nodeid].source->attrs.name << ",";
+  //  }
+  //  LOG(INFO) << "}";
+  //}
   // Following is the same as in BFS. Create undirected graph from original graph.
   entry_to_nodes_.resize(graph.num_node_entries());
   node_to_entries_.resize(graph.num_nodes());
@@ -300,11 +376,11 @@ void NeuralLevels::Run() {
     }
     levelid[nodeid] = group2level[groupid];
   }
-  /*for (uint32_t nodeid = 0; nodeid < graph.num_nodes(); ++nodeid) {
-      LOG(INFO) << "Node #" << nodeid
-                << ": " << graph[nodeid].source->attrs.name
-                << " " << levelid[nodeid];
-  }*/
+  //for (uint32_t nodeid = 0; nodeid < graph.num_nodes(); ++nodeid) {
+  //    LOG(INFO) << "Node #" << nodeid
+  //              << ": " << graph[nodeid].source->attrs.name
+  //              << " " << levelid[nodeid];
+  //}
   // Make levels.
   for (uint32_t nodeid = 0; nodeid < graph.num_nodes(); ++nodeid) {
     AddNode(levelid[nodeid], nodeid);
@@ -323,15 +399,15 @@ void NeuralLevels::Run() {
 void NeuralLevels::Print() const {
   const IndexedGraph& graph = src_graph_->indexed_graph();
   const ShapeVector& shapes = src_graph_->GetAttr<ShapeVector>("shape");
-  /*LOG(INFO) << "NodeEntry To Node";
-  for (uint32_t entid = 0; entid < entry_to_nodes_.size(); ++entid) {
-    ostringstream oss;
-    oss << "Entry#" << entid << ": ";
-    for (uint32_t nodeid : entry_to_nodes_[entid]) {
-      oss << nodeid << " ";
-    }
-    LOG(INFO) << oss.str();
-  }*/
+  LOG(INFO) << "NodeEntry To Node";
+  //for (uint32_t entid = 0; entid < entry_to_nodes_.size(); ++entid) {
+  //  ostringstream oss;
+  //  oss << "Entry#" << entid << ": ";
+  //  for (uint32_t nodeid : entry_to_nodes_[entid]) {
+  //    oss << nodeid << " ";
+  //  }
+  //  LOG(INFO) << oss.str();
+  //}
   for (size_t i = 0; i < node_levels_.size(); ++i) {
     LOG(INFO) << "Level Node: [";
     for (uint32_t nodeid : node_levels_[i]) {
@@ -358,7 +434,7 @@ void NeuralLevels::Print() const {
     }
   }
   LOG(INFO) << "#Levels: " << node_levels_.size();
-}
+}*/
 
 namespace {
 inline bool AddInEntryIfNotExist(NodePtr node, const NodeEntry& toadd) {
@@ -480,6 +556,8 @@ MegaGraph::MegaGraph(Graph* orig): orig_graph_(orig) {
     uint32_t newnid = newidx.node_id(newnode);
     gv.DFSNodeVisit([&] (const Node* orignode) {
           uint32_t nid = origidx.node_id(orignode);
+          CHECK(orignode_mapping_type_[nid] == MapType::kNA)
+            << origidx[nid].source->attrs.name << " " << gv;
           orignode_mapping_type_[nid] = MapType::kMapToNode;
           orignode_mappings_[nid] = newnode;
         });
@@ -496,9 +574,12 @@ MegaGraph::MegaGraph(Graph* orig): orig_graph_(orig) {
       IndexedGraph::NodeEntry newent{newnid, idx, 0};
       gv.DFSNodeVisit([&] (const Node* orignode) {
             uint32_t nid = origidx.node_id(orignode);
+            CHECK(orignode_mapping_type_[nid] == MapType::kNA)
+              << origidx[nid].source->attrs.name << " " << gv;
             orignode_mapping_type_[nid] = MapType::kMapToEntry;
             orignode_mappings_[nid] = newent;
           });
+
       gv.DFSEntryVisit([&] (const Node* orignode, const vector<uint32_t>& oidx) {
             uint32_t nid = origidx.node_id(orignode);
             for (uint32_t i : oidx) {
@@ -629,11 +710,18 @@ void MegaGraph::MergeElementwise() {
     for (const uint32_t orignid : kv.second) {
       const Node* orignode = origidx[orignid].source;
       for (const auto& ent : orignode->inputs) {
-        equals_.push_back(std::make_pair(anchor, origidx.entry_id(ent)));
+        entry_equals_.push_back(std::make_pair(anchor, origidx.entry_id(ent)));
       }
       for (uint32_t i = 0; i < orignode->num_outputs(); ++i) {
-        equals_.push_back(std::make_pair(anchor, origidx.entry_id(orignid, i)));
+        entry_equals_.push_back(std::make_pair(anchor, origidx.entry_id(orignid, i)));
       }
+    }
+  }
+  // Create node equals.
+  for (const auto& kv : elemgroups) {
+    if (kv.second.empty()) continue;
+    for (size_t i = 1; i < kv.second.size(); ++i) {
+      node_equals_.push_back({kv.second[0], kv.second[i]});
     }
   }
 }
@@ -643,6 +731,7 @@ void MegaGraph::MergeWeightAndGradients() {
   const auto& origidx = orig_graph_->indexed_graph();
   const auto& bwdoutputs = orig_graph_->GetAttr<vector<IndexedGraph::NodeEntry>>("bwdoutputs");
   vector<vector<uint32_t>> weightgroups;
+  vector<vector<uint32_t>> sumgradgroups;
   for (const auto& origent : bwdoutputs) {
     uint32_t origeid = origidx.entry_id(origent);
     CHECK(origentry_mapping_type_[origeid] == MapType::kMapToEntry);
@@ -651,31 +740,128 @@ void MegaGraph::MergeWeightAndGradients() {
     LOG(INFO) << origidx[origent.node_id].source->attrs.name << "#"
       << origent.index << " eid=" << origeid << " -> " << newent.node_id << "#" << newent.index;
     vector<uint32_t> group;
-    entry_mappings_.at(newnode).at(newent.index).DFSNodeVisit(
-        [&] (const Node* orignode) {
+    vector<uint32_t> sggroup;
+    entry_mappings_.at(newnode).at(newent.index).DFSEntryVisit(
+        [&] (const Node* orignode, const vector<uint32_t>& oidx) {
           uint32_t nid = origidx.node_id(orignode);
-          LOG(INFO) << "\t" << orignode->attrs.name;
-          group.push_back(nid);
+          for (uint32_t i : oidx) {
+            LOG(INFO) << "\t" << orignode->attrs.name << "#" << i;
+            uint32_t eid = origidx.entry_id(nid, i);
+            group.push_back(eid);
+          }
+          if (utils::StartsWith(orignode->attrs.name, "sum_grad")) {
+            sggroup.push_back(nid);
+          }
         });
     weightgroups.push_back(group);
+    sumgradgroups.push_back(sggroup);
   }
 
   // Create entry equals.
   for (const auto& g : weightgroups) {
-    const uint32_t anchor = origidx.entry_id(g[0], 0);
-    for (const uint32_t orignid : g) {
-      const Node* orignode = origidx[orignid].source;
-      for (const auto& ent : orignode->inputs) {
-        equals_.push_back(std::make_pair(anchor, origidx.entry_id(ent)));
-      }
-      for (uint32_t i = 0; i < orignode->num_outputs(); ++i) {
-        equals_.push_back(std::make_pair(anchor, origidx.entry_id(orignid, i)));
-      }
+    if (g.empty()) continue;
+    const uint32_t anchor = g[0];
+    for (size_t i = 1; i < g.size(); ++i) {
+      entry_equals_.push_back({anchor, g[i]});
+    }
+  }
+  // Create node equals.
+  for (const auto& g : sumgradgroups) {
+    if (g.empty()) continue;
+    for (size_t i = 1; i < g.size(); ++i) {
+      node_equals_.push_back({g[0], g[i]});
     }
   }
 }
 
 void MegaGraph::MergeRNNSteps() {
+  const auto& idx = graph_.indexed_graph();
+  const auto& origidx = orig_graph_->indexed_graph();
+  // 1. Find all step scopes.
+  unordered_map<string, vector<uint32_t>> steps;
+  unordered_map<string, vector<uint32_t>> step_entries;
+  for (uint32_t nid = 0; nid < origidx.num_nodes(); ++nid) {
+    const Node* node = origidx[nid].source;
+    if (node->attrs.dict.count("rnn_step")) {
+      const auto& stepname = node->attrs.dict.at("rnn_step");
+      steps[stepname].push_back(nid);
+      for (uint32_t i = 0; i < node->num_outputs(); ++i) {
+        step_entries[stepname].push_back(origidx.entry_id(nid, i));
+      }
+    }
+  }
+  if (steps.size() == 0) return;
+  // 2. Find bp nodes.
+  vector<vector<uint32_t>> step_with_bp;
+  size_t max_step_len = 0;
+  for (const auto& kv : steps) {
+    vector<uint32_t> ns;
+    for (uint32_t nid : kv.second) {
+      CHECK(orignode_mapping_type_[nid] == MapType::kMapToNode)
+        << origidx[nid].source->attrs.name;
+      const Node* newnode = nnvm::get<const Node*>(orignode_mappings_[nid]);
+      node_mappings_.at(newnode).DFSNodeVisit(
+          [&] (const Node* orignode) {
+            ns.push_back(origidx.node_id(orignode));
+          });
+    }
+    for (uint32_t eid : step_entries[kv.first]) {
+      if (origentry_mapping_type_[eid] == MapType::kMapToEntry) {
+        const auto& newent = nnvm::get<IndexedGraph::NodeEntry>(origentry_mappings_[eid]);
+        entry_mappings_.at(idx[newent.node_id].source).at(newent.index)
+          .DFSNodeVisit([&] (const Node* orignode) {
+                ns.push_back(origidx.node_id(orignode));
+              });
+      }
+    }
+    if (ns.size() > max_step_len) {
+      max_step_len = ns.size();
+    }
+    step_with_bp.push_back(std::move(ns));
+  }
+  const size_t num_steps = step_with_bp.size();
+  // 3. Build equals
+  for (size_t t = 0; t < max_step_len; ++t) {
+    uint32_t anchor = step_with_bp[0][t];
+    const Node* anode = origidx[anchor].source;
+    for (size_t s = 1; s < num_steps; ++s) {
+      if (t >= step_with_bp[s].size()) {
+        // NOTE: not all the RNN steps are identical to each other. For example, the hidden
+        // state of the last step will no longer be fed to another step. Here we only merge
+        // nodes that are available to the steps.
+        continue;
+      }
+      uint32_t nid = step_with_bp[s][t];
+      const Node* n = origidx[nid].source;
+      CHECK((anode->is_variable() && n->is_variable()) || anode->op() == n->op())
+        << anode->attrs.name << " v.s. " << n->attrs.name;
+      node_equals_.push_back(std::make_pair(anchor, nid));
+      CHECK(anode->num_outputs() == n->num_outputs());
+      CHECK(anode->inputs.size() == n->inputs.size());
+      for (uint32_t i = 0; i < n->inputs.size(); ++i) {
+        uint32_t eid1 = origidx.entry_id(anode->inputs[i]);
+        uint32_t eid2 = origidx.entry_id(n->inputs[i]);
+        entry_equals_.push_back({eid1, eid2});
+      }
+      for (uint32_t i = 0; i < n->num_outputs(); ++i) {
+        uint32_t eid1 = origidx.entry_id(anchor, i);
+        uint32_t eid2 = origidx.entry_id(nid, i);
+        entry_equals_.push_back({eid1, eid2});
+      }
+    }
+  }
+}
+  
+vector<uint32_t> MegaGraph::GetMegaNodeGroup(uint32_t node_id) const {
+  const auto& origidx = orig_graph_->indexed_graph();
+  vector<uint32_t> ret;
+  CHECK(orignode_mapping_type_[node_id] == MapType::kMapToNode);
+  const Node* meganode = nnvm::get<const Node*>(orignode_mappings_[node_id]);
+  node_mappings_.at(meganode).DFSNodeVisit(
+      [&] (const Node* orignode) {
+        ret.push_back(origidx.node_id(orignode));
+      });
+  return ret;
 }
 
 }  // namespace pass

@@ -538,9 +538,19 @@ class GraphView {
   // Note: Only nodes depending on the start entries will be visited.
   template<typename FVisit>
   void DFSNodeVisit(FVisit fvisit) const {
+    if (start_set_ == end_set_) return;
     const auto& idx = graph_->indexed_graph();
     for (const auto& p : node_ids_) {
-      fvisit(idx[p.first].source);
+      bool flag = true;
+      for (uint32_t i : p.second) {
+        if (!start_set_.count(idx.entry_id(p.first, i))) {
+          flag = false;
+          break;
+        }
+      }
+      if (!flag) {
+        fvisit(idx[p.first].source);
+      }
     }
   }
 

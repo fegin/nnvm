@@ -73,11 +73,12 @@ bool NextSchemeVec(const vector<DPEntry>& entries, vector<Scheme>* schvec) {
 
 CutAlgorithm::CutAlgorithm(Graph* src,
                            const Levels& levels,
-                           const NodeEntryGroups& groups,
+                           const NodeEntryGroups& eg,
+                           const NodeGroups& ng,
                            size_t num_devices,
                            bool use_equal_cuts):
   src_graph_(src), levels_(levels),
-  entry_groups_(groups), use_equal_cuts_(use_equal_cuts),
+  entry_groups_(eg), node_groups_(ng), use_equal_cuts_(use_equal_cuts),
   num_cuts_(utils::GetNumCuts(num_devices)) {
   const IndexedGraph& idxgraph = src->indexed_graph();
   const OpMap<FAlignedSchemes>& align_map =
@@ -98,16 +99,17 @@ CutAlgorithm::CutAlgorithm(Graph* src,
       dp_entries_[i].push_back(dpent);
     }
   }
-  dp_operators_.resize(levels.NumNodeLevels());
-  for (size_t i = 0; i < levels.NumNodeLevels(); ++i) {
-    const auto& nodelevel = levels.GetNodeLevel(i);
+  dp_operators_.resize(levels.NumNodeGroupLevels());
+  for (size_t i = 0; i < levels.NumNodeGroupLevels(); ++i) {
+    const auto& nodelevel = levels.GetNodeGroupLevel(i);
     for (size_t j = 0; j < nodelevel.size(); ++j) {
       DPOp dpop;
       // Node id.
-      const uint32_t node_id = nodelevel[j];
-      dpop.node_id = node_id;
+      const uint32_t node_group_id = nodelevel[j];
+      dpop.node_group_id = node_group_id;
+      const uint32_t node_id = *(node_groups_[node_group_id].begin());
       // Input/Output entries.
-      const Node* node = idxgraph[dpop.node_id].source;
+      const Node* node = idxgraph[node_id].source;
       //LOG(INFO) << "!!" << node->attrs.name;
       vector<TShape> input_shapes, output_shapes;
       for (const NodeEntry& in_ent : node->inputs) {
@@ -361,17 +363,20 @@ void CutAlgorithm::Print() const {
   for (size_t i = 0; i < dp_operators_.size(); ++i) {
     LOG(INFO) << "Level Node: [";
     for (const auto& dp_op : dp_operators_[i]) {
-      const uint32_t nodeid = dp_op.node_id;
-      const Node* node = graph[nodeid].source;
+      const uint32_t groupid = dp_op.node_group_id;
       ostringstream oss;
+      oss << "\t{";
+      for (const uint32_t nodeid : node_groups_[groupid]) {
+        const Node* node = graph[nodeid].source;
+        oss << "#" << nodeid << ": \"" << node->attrs.name << "\""
+            << (node->is_variable()? "(variable)" : "");
+      }
       oss << " [";
       for (size_t choseid : dp_op.chosen_aligned_requests) {
         oss << choseid << " ";
       }
       oss << "]";
-      LOG(INFO) << "\t#" << nodeid << ": \"" << node->attrs.name << "\""
-                << (node->is_variable()? "(variable)" : "")
-                << oss.str();
+      LOG(INFO) << oss.str();
     }
     LOG(INFO) << "]";
     if (i < dp_entries_.size()) {

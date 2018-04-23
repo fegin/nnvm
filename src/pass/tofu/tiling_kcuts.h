@@ -20,7 +20,7 @@ struct DPEntry {
 };
 
 struct DPOp {
-  uint32_t node_id;
+  uint32_t node_group_id;
   std::vector<Levels::Index> input_entry_index;
   std::vector<Levels::Index> output_entry_index;
   std::vector<SchemeRequest> aligned_requests;
@@ -49,7 +49,8 @@ class CutAlgorithm : public Tiling {
   // Constructor.
   CutAlgorithm(Graph* src,
                const Levels& levels,
-               const NodeEntryGroups& groups,
+               const NodeEntryGroups& eg,
+               const NodeGroups& ng,
                size_t num_devices,
                bool use_equal_cuts=false);
 
@@ -84,7 +85,9 @@ class CutAlgorithm : public Tiling {
   void Reset();
 
   inline bool IsVariable(const DPOp& op) const {
-    return src_graph_->indexed_graph()[op.node_id].source->is_variable();
+    const auto& idx = src_graph_->indexed_graph();
+    const uint32_t nid = *(node_groups_[op.node_group_id].begin());
+    return idx[nid].source->is_variable();
   }
 
   std::pair<cost_t, size_t> ConversionCost(
@@ -101,6 +104,7 @@ class CutAlgorithm : public Tiling {
   Graph* src_graph_;
   const Levels& levels_;
   const NodeEntryGroups& entry_groups_;
+  const NodeGroups& node_groups_;
   const bool use_equal_cuts_{false};
   const uint32_t num_cuts_;
 

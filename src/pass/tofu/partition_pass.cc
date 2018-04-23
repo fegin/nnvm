@@ -95,36 +95,39 @@ Graph PartitionPass(Graph src) {
   //}
 
   MegaGraph mg(&src);
-  //mg.Print();
+  mg.Print();
   mg.MergeElementwise();
   mg.MergeWeightAndGradients();
   mg.MergeRNNSteps();
-  const auto& equal = mg.entry_equals();
 
-  NodeEntryGroups groups(graph.num_node_entries(), equal);
+  NodeEntryGroups ent_groups(src, mg.entry_equals());
+  ent_groups.Print();
+  NodeGroups node_groups(src, mg.node_equals());
+  node_groups.Print();
 
   // TODO(minjie): chaos ownership
   Levels* lvls = nullptr;
   if (use_bfs) {
     const uint32_t start_node_id =
       graph.node_id(src.outputs[0].node.get());
-    BFS* bfslvls = new BFS(&src, &groups);
-    bfslvls->Run(start_node_id);
+    BFS* bfslvls = new BFS(&src, &ent_groups, &node_groups);
+    bfslvls->Run(mg.GetMegaNodeGroup(start_node_id));
     bfslvls->Print();
     lvls = bfslvls;
   } else {
-    NeuralLevels* nnlvls = new NeuralLevels(&src, &groups);
-    nnlvls->Run();
-    nnlvls->Print();
-    lvls = nnlvls;
+    //NeuralLevels* nnlvls = new NeuralLevels(&src, &ent_groups);
+    //nnlvls->Run();
+    //nnlvls->Print();
+    //lvls = nnlvls;
+    LOG(FATAL) << "Disabled for now.";
   }
-  LOG(FATAL) << "!!!!!";
 
   unique_ptr<Tiling> tiling = Tiling::Create(
       tiling_type,
       &src,
       *lvls,
-      groups,
+      ent_groups,
+      node_groups,
       num_devices);
   tiling->Run();
   tiling->Print();

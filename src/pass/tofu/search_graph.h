@@ -20,21 +20,43 @@ class NodeEntryGroups {
   // "equals" is a map from NodeEntryId to NodeEntryId indicating the two nodes should be grouped
   // together. NodeEntry without any groups could be missing in the map, and they will be put in
   // a group that has only one node entry.
-  NodeEntryGroups(uint32_t num_node_entries,
+  NodeEntryGroups(const Graph& graph,
                   const std::vector<std::pair<uint32_t, uint32_t>>& equals);
 
   const std::unordered_set<uint32_t>& operator[](uint32_t group_id) const {
-    return groups_[group_id];
+    return groups_.at(group_id);
   }
   uint32_t group_id(uint32_t entry_id) const {
-    return entry2group_[entry_id];
+    return entry2group_.at(entry_id);
   }
 
+  void Print() const;
+
  private:
+  const Graph& graph_;
   // Each group is a set of NodeEntryId.
   std::vector<std::unordered_set<uint32_t>> groups_;
   // Map from NodeEntryId to NodeEntryGroupId.
   std::vector<uint32_t> entry2group_;
+};
+
+class NodeGroups {
+ public:
+  NodeGroups(const Graph& graph,
+             const std::vector<std::pair<uint32_t, uint32_t>>& equals);
+   const std::unordered_set<uint32_t>& operator[](uint32_t group_id) const {
+    return groups_.at(group_id);
+  }
+  uint32_t group_id(uint32_t node_id) const {
+    return node2group_.at(node_id);
+  }           
+  void Print() const;
+private:
+  const Graph& graph_;
+  // Each group is a set of NodeIds.
+  std::vector<std::unordered_set<uint32_t>> groups_;
+  // Map from NodeEntryId to NodeEntryGroupId.
+  std::vector<uint32_t> node2group_;
 };
 
 class Levels {
@@ -42,18 +64,19 @@ class Levels {
   // Pair: (levelid, index_within_level).
   typedef std::pair<uint32_t, uint32_t> Index;
 
-  Levels(const NodeEntryGroups* groups): entry_groups_(groups) {}
+  Levels(const NodeEntryGroups* eg, const NodeGroups* ng):
+    entry_groups_(eg), node_groups_(ng) {}
 
-  inline size_t NumNodeLevels() const {
-    return node_levels_.size();
+  inline size_t NumNodeGroupLevels() const {
+    return node_group_levels_.size();
   }
 
   inline size_t NumEntryGroupLevels() const {
     return entry_group_levels_.size();
   }
 
-  inline const std::vector<uint32_t>& GetNodeLevel(size_t lvl) const {
-    return node_levels_[lvl];
+  inline const std::vector<uint32_t>& GetNodeGroupLevel(size_t lvl) const {
+    return node_group_levels_[lvl];
   }
 
   inline const std::vector<uint32_t>& GetEntryGroupLevel(size_t lvl) const {
@@ -79,8 +102,9 @@ class Levels {
 
   // Pointer to the node entry groups (no ownership).
   const NodeEntryGroups* entry_groups_;
+  const NodeGroups* node_groups_;
 
-  std::vector<std::vector<uint32_t>> node_levels_;
+  std::vector<std::vector<uint32_t>> node_group_levels_;
   std::vector<std::vector<uint32_t>> entry_group_levels_;
 
   std::unordered_map<uint32_t, Levels::Index> node2index_;
@@ -92,10 +116,10 @@ class BFS : public Levels {
   // Note: This BFS does not consider control dependencies between nodes.
  public:
   // Constructor.
-  BFS(Graph* src, const NodeEntryGroups* groups);
+  BFS(Graph* src, const NodeEntryGroups* eg, const NodeGroups* ng);
 
   // Run BFS from the given start node. Treat graph as undirected one.
-  void Run(uint32_t start_node_id);
+  void Run(std::vector<uint32_t> start_node_id);
 
   // Print graph in a readable way.
   void Print() const;
@@ -106,13 +130,13 @@ class BFS : public Levels {
   // Pointer to the source graph (no ownership).
   Graph* src_graph_;
 
-  // Entry to all its producer/consumer nodes.
-  std::vector<std::unordered_set<uint32_t>> entry_to_nodes_;
-  // Node to all its input/output nodes.
-  std::vector<std::unordered_set<uint32_t>> node_to_entries_;
+  // Entry group to all its producer/consumer node groups.
+  std::unordered_map<uint32_t, std::unordered_set<uint32_t>> eg2ng_;
+  // Node group to all its input/output node group.
+  std::unordered_map<uint32_t, std::unordered_set<uint32_t>> ng2eg_;
 };
 
-class NeuralLevels : public Levels {
+/*class NeuralLevels : public Levels {
   // Construct node and entry levels by the neural network layers.
  public:
   // Constructor.
@@ -139,7 +163,7 @@ class NeuralLevels : public Levels {
   std::vector<std::unordered_set<uint32_t>> entry_to_nodes_;
   // Node to all its input/output nodes.
   std::vector<std::unordered_set<uint32_t>> node_to_entries_;
-};
+};*/
 
 class MegaGraph {
  public:
@@ -153,8 +177,13 @@ class MegaGraph {
 
   void MergeRNNSteps();
 
+  std::vector<uint32_t> GetMegaNodeGroup(uint32_t node_id) const;
+
   const std::vector<std::pair<uint32_t, uint32_t>>& entry_equals() const {
     return entry_equals_;
+  }
+  const std::vector<std::pair<uint32_t, uint32_t>>& node_equals() const {
+    return node_equals_;
   }
 
  private:

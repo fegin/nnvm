@@ -32,7 +32,8 @@ class Tiling {
       const std::string& name,
       Graph* graph,
       const Levels& levels,
-      const NodeEntryGroups& groups,
+      const NodeEntryGroups& eg,
+      const NodeGroups& ng,
       size_t num_devices);
 };
 
