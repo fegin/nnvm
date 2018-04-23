@@ -1,6 +1,7 @@
 #include <nnvm/graph_attr_types.h>
 
 #include "./tiling_kcuts.h"
+#include "./utils.h"
 
 using namespace std;
 
@@ -77,7 +78,7 @@ CutAlgorithm::CutAlgorithm(Graph* src,
                            bool use_equal_cuts):
   src_graph_(src), levels_(levels),
   entry_groups_(groups), use_equal_cuts_(use_equal_cuts),
-  num_cuts_(num_devices) {
+  num_cuts_(utils::GetNumCuts(num_devices)) {
   const IndexedGraph& idxgraph = src->indexed_graph();
   const OpMap<FAlignedSchemes>& align_map =
     Op::GetAttr<FAlignedSchemes>("FAlignedSchemes");
