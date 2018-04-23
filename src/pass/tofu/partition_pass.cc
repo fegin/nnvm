@@ -73,6 +73,7 @@ Graph PartitionPass(Graph src) {
   const int num_devices = src.GetAttr<int>("num_devices");
   const int num_cuts = GetNumCuts(num_devices);
   const string& default_group = src.GetAttr<string>("default_group");
+  const string& copy_op_name = src.GetAttr<string>("copy_op_name");
     
   LOG(INFO) << "Tiling type: " << tiling_type;
   LOG(INFO) << "Oversharding status=" << oversharding;
@@ -133,6 +134,7 @@ Graph PartitionPass(Graph src) {
   pttn.SetOversharding(oversharding);
   pttn.SetDefaultGraph(default_group);
   pttn.SetUseFusedConversion(fused_conversion);
+  pttn.SetCopyOp(Op::Get(copy_op_name));
 
   const Graph& ret = pttn.Run();
 
