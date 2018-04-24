@@ -101,9 +101,9 @@ Graph PartitionPass(Graph src) {
   mg.MergeRNNSteps();
 
   NodeEntryGroups ent_groups(src, mg.entry_equals());
-  ent_groups.Print();
+  //ent_groups.Print();
   NodeGroups node_groups(src, mg.node_equals());
-  node_groups.Print();
+  //node_groups.Print();
 
   // TODO(minjie): chaos ownership
   Levels* lvls = nullptr;

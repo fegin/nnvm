@@ -84,7 +84,8 @@ cost_t Region::ConvertCost2(const Region& r1, const Scheme& sch1,
       if (!r2.CanSplit2(sch2)) {
         // Cannot split given the scheme. Return a very large cost that is guaranteed to
         // be worse.
-        cost = 100 * (r1.Area() + r2.Area());
+        //cost = 100 * (r1.Area() + r2.Area());
+        return std::numeric_limits<cost_t>::max();
       } else {
         cost = r1.Area();
       }
@@ -99,7 +100,8 @@ cost_t Region::ConvertCost2(const Region& r1, const Scheme& sch1,
     } else if (!r1.CanSplit2(sch1) || !r2.CanSplit2(sch2)) {
       // Cannot split given the scheme. Return a very large cost that is guaranteed to
       // be worse.
-      cost = 100 * (r1.Area() + r2.Area());
+      //cost = 100 * (r1.Area() + r2.Area());
+      return std::numeric_limits<cost_t>::max();
     } else {
       const pair<Region, Region>& r1split = r1.Split2(sch1);
       const pair<Region, Region>& r2split = r2.Split2(sch2);

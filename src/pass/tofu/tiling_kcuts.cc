@@ -289,7 +289,6 @@ pair<cost_t, size_t> CutAlgorithm::ConversionCost(
     const DPState* prev_state,
     const DPState* next_state,
     size_t lvl) const {
-  //LOG(INFO) << src_graph_->indexed_graph()[op.node_id].source->attrs.name;
   const vector<Scheme>* prev_schemes = (prev_state)? &prev_state->schemes : nullptr;
   const vector<Scheme>* next_schemes = (next_state)? &next_state->schemes : nullptr;
   const vector<DPEntry>* prev_entries = (lvl > 0)? &dp_entries_[lvl-1] : nullptr;
@@ -312,12 +311,13 @@ pair<cost_t, size_t> CutAlgorithm::ConversionCost(
   CHECK_EQ(output_schemes.size(), op.output_ghost_regions.size());
   CHECK_GT(aligned_requests.size(), 0);
   cost_t cost = std::numeric_limits<cost_t>::max();
-  size_t req_idx = 0;
+  size_t req_idx = aligned_requests.size();
   for (size_t i = 0; i < aligned_requests.size(); ++i) {
     const SchemeRequest& req = aligned_requests[i];
     CHECK_EQ(input_schemes.size(), req.input_schemes.size());
     CHECK_EQ(output_schemes.size(), req.output_schemes.size());
     cost_t req_cost = 0;
+    bool skip = false;
     // Input conversion cost.
     for (size_t j = 0; j < input_schemes.size(); ++j) {
       if (input_schemes[j] == nullptr) {
@@ -327,11 +327,18 @@ pair<cost_t, size_t> CutAlgorithm::ConversionCost(
         CHECK(ignore_jump);
         continue;
       }
-      req_cost += Region::ConvertCost2(input_entries[j]->region,
-                                       *input_schemes[j],
-                                       op.input_ghost_regions[j],
-                                       req.input_schemes[j]);
+      cost_t in_cost = Region::ConvertCost2(
+          input_entries[j]->region,
+          *input_schemes[j],
+          op.input_ghost_regions[j],
+          req.input_schemes[j]);
+      if (in_cost == std::numeric_limits<cost_t>::max()) {
+        skip = true;
+        break;
+      }
+      req_cost += in_cost;
     }
+    if (skip) continue;
     // Output conversion cost.
     for (size_t j = 0; j < output_schemes.size(); ++j) {
       if (output_schemes[j] == nullptr) {
@@ -341,17 +348,28 @@ pair<cost_t, size_t> CutAlgorithm::ConversionCost(
         CHECK(ignore_jump);
         continue;
       }
-      req_cost += Region::ConvertCost2(op.output_ghost_regions[j],
-                                       req.output_schemes[j],
-                                       output_entries[j]->region,
-                                       *output_schemes[j]);
+      cost_t out_cost = Region::ConvertCost2(
+          op.output_ghost_regions[j],
+          req.output_schemes[j],
+          output_entries[j]->region,
+          *output_schemes[j]);
+      if (out_cost == std::numeric_limits<cost_t>::max()) {
+        skip = true;
+        break;
+      }
+      req_cost += out_cost;
     }
+    if (skip) continue;
     // Save the minimal cost.
     if (req_cost < cost) {
       cost = req_cost;
       req_idx = i;
     }
   }
+  CHECK(req_idx < aligned_requests.size())
+    << "No partition request can be fulfilled for node: "
+    << src_graph_->indexed_graph()[*(node_groups_[op.node_group_id].begin())]
+                   .source->attrs.name;
   return make_pair(cost, req_idx);
 }
 

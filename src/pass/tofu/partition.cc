@@ -610,7 +610,7 @@ Graph GraphPartitioner::Run() {
   // Construct grids for operator's input/output. Construct splitted operator.
   DFSVisit( src_graph_->outputs, [&](const NodePtr& node) {
     const uint32_t nodeid = graph.node_id(node.get());
-    LOG(INFO) << "Process node#" << nodeid << ": " << node->attrs.name;
+    //LOG(INFO) << "Process node#" << nodeid << ": " << node->attrs.name;
     if (node->is_variable()) {
       // Variable node does not have input/output grid because it is always
       // aligned. Split node will be created to dispatch the data to different devices.
