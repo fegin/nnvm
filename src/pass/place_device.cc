@@ -7,6 +7,7 @@
 #include <nnvm/pass.h>
 #include <nnvm/op_attr_types.h>
 #include <nnvm/graph_attr_types.h>
+#include "./tofu/utils.h"
 
 using namespace std;
 
@@ -348,6 +349,48 @@ Graph PlaceDevice(Graph src) {
 
   // Generate dot graph.
   //PlotGraph(ret, new_device_vec);
+  size_t num_convert_split = 0;
+  size_t num_convert_concat = 0;
+  size_t num_red_split = 0;
+  size_t num_red_concat = 0;
+  size_t num_red_sum = 0;
+  size_t num_var_split = 0;
+  size_t num_var_concat = 0;
+  size_t num_copy = 0;
+  size_t num_tofu_fused_convert = 0;
+  for (uint32_t nid = 0; nid < retidx.num_nodes(); ++nid) {
+    if (retidx[nid].source->is_variable()) continue;
+    const auto& name = retidx[nid].source->attrs.name;
+    if (utils::StartsWith(name, "_TOFU[convert]SPLIT")) {
+      ++num_convert_split;
+    } else if (utils::StartsWith(name, "_TOFU[convert]CONCAT")) {
+      ++num_convert_concat;
+    } else if (utils::StartsWith(name, "_TOFU[red]SPLIT")) {
+      ++num_red_split;
+    } else if (utils::StartsWith(name, "_TOFU[red]CONCAT")) {
+      ++num_red_concat;
+    } else if (utils::StartsWith(name, "_TOFU[red]SUM")) {
+      ++num_red_sum;
+    } else if (utils::StartsWith(name, "_TOFU[var]SPLIT")) {
+      ++num_var_split;
+    } else if (utils::StartsWith(name, "_TOFU[var]CONCAT")) {
+      ++num_var_concat;
+    } else if (retidx[nid].source->op() == copy_op) {
+      ++num_copy;
+    } else if (utils::StartsWith(name, "_TOFU_CONVERT")) {
+      ++num_tofu_fused_convert;
+    }
+  }
+  LOG(INFO) << "#Tofu convert split nodes: " << num_convert_split;
+  LOG(INFO) << "#Tofu convert concat nodes: " << num_convert_concat;
+  LOG(INFO) << "#Tofu reduce split nodes: " << num_red_split;
+  LOG(INFO) << "#Tofu reduce concat nodes: " << num_red_concat;
+  LOG(INFO) << "#Tofu reduce sum nodes: " << num_red_sum;
+  LOG(INFO) << "#Tofu variable split nodes: " << num_var_split;
+  LOG(INFO) << "#Tofu variable concat nodes: " << num_var_concat;
+  LOG(INFO) << "#Tofu fused convert nodes: " << num_tofu_fused_convert;
+  LOG(INFO) << "#Copy nodes: " << num_copy;
+
 
   ret.attrs["device"] = std::make_shared<any>(std::move(new_device_vec));
   return ret;
