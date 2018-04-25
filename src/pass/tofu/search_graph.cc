@@ -486,6 +486,7 @@ MegaGraph::MegaGraph(Graph* orig): orig_graph_(orig) {
   CHECK(orig->attrs.count("fwdnode2bwdview") != 0);
   CHECK(orig->attrs.count("fwdoutputs") != 0);
   CHECK(orig->attrs.count("bwdoutputs") != 0);
+
   typedef std::pair<std::vector<IndexedGraph::NodeEntry>,
                     std::vector<IndexedGraph::NodeEntry>> View;
   typedef std::unordered_map<IndexedGraph::NodeEntry, View> Fwdent2bwdview;
@@ -502,14 +503,15 @@ MegaGraph::MegaGraph(Graph* orig): orig_graph_(orig) {
   for (uint32_t orignid = 0; orignid < origidx.num_nodes(); ++orignid) {
     const Node* orignode = origidx[orignid].source;
     if (fwdnode2bwdview.count(orignode)) {
-      //LOG(INFO) << "Orig node: " << orignode->attrs.name;
       NodePtr newnode = Node::Create();
+      LOG(INFO) << "Orig node: " << orignode->attrs.name << " New node: " << newnode.get();
       orignode2newnode[orignode] = newnode;
+      CHECK(!node_mappings_.count(newnode.get()));
       node_mappings_.insert(std::make_pair(newnode.get(), GraphView(orig, orignode)));
       const auto& bwdview = fwdnode2bwdview.at(orignode);
       node_mappings_.at(newnode.get()).Merge(
           GraphView(orig, bwdview.first, bwdview.second));
-      //LOG(INFO) << node_mappings_.at(newnode.get());
+      LOG(INFO) << "\t" << node_mappings_.at(newnode.get());
       //ostringstream oss;
       //node_mappings_.at(newnode.get()).DFSNodeVisit([&] (const Node* n) {
             //oss << n->attrs.name << " ";
@@ -527,6 +529,8 @@ MegaGraph::MegaGraph(Graph* orig): orig_graph_(orig) {
           entry_mappings_.at(newnode.get()).at(i).Merge(
               GraphView(orig, bwdview.first, bwdview.second));
         }
+        LOG(INFO) << "\tNew outentry#" << i;
+        LOG(INFO) << "\t\t" << entry_mappings_.at(newnode.get()).at(i);
       }
       for (uint32_t i = 0; i < orignode->inputs.size(); ++i) {
         // Connect the entry.
@@ -540,7 +544,7 @@ MegaGraph::MegaGraph(Graph* orig): orig_graph_(orig) {
   // Graph output entries.
   for (const auto& origent : fwdoutputs) {
     const Node* orignode = origidx[origent.node_id].source;
-    NodePtr newnode = orignode2newnode[orignode];
+    NodePtr newnode = orignode2newnode.at(orignode);
     graph_.outputs.push_back(
         NodeEntry{newnode, origent.index, 0});
   }
@@ -777,72 +781,106 @@ void MegaGraph::MergeWeightAndGradients() {
 void MegaGraph::MergeRNNSteps() {
   const auto& idx = graph_.indexed_graph();
   const auto& origidx = orig_graph_->indexed_graph();
+  typedef std::pair<std::vector<IndexedGraph::NodeEntry>,
+                    std::vector<IndexedGraph::NodeEntry>> View;
+  typedef std::unordered_map<const Node*, View> Fwdnode2bwdview;
+  const auto& fwdnode2bwdview = orig_graph_->GetAttr<Fwdnode2bwdview>("fwdnode2bwdview");
   // 1. Find all step scopes.
   unordered_map<string, vector<uint32_t>> steps;
   unordered_map<string, vector<uint32_t>> step_entries;
   for (uint32_t nid = 0; nid < origidx.num_nodes(); ++nid) {
     const Node* node = origidx[nid].source;
-    if (node->attrs.dict.count("rnn_step")) {
+    if (node->attrs.dict.count("rnn_step") && fwdnode2bwdview.count(node)) {
       const auto& stepname = node->attrs.dict.at("rnn_step");
       steps[stepname].push_back(nid);
       for (uint32_t i = 0; i < node->num_outputs(); ++i) {
+        LOG(INFO) << node->attrs.name << "#" << i << " eid=" << origidx.entry_id(nid, i);
         step_entries[stepname].push_back(origidx.entry_id(nid, i));
       }
     }
   }
   if (steps.size() == 0) return;
   // 2. Find bp nodes.
-  vector<vector<uint32_t>> step_with_bp;
+  const size_t num_steps = steps.size();
   size_t max_step_len = 0;
+  size_t max_step_ent_len = 0;
   for (const auto& kv : steps) {
-    vector<uint32_t> ns;
-    for (uint32_t nid : kv.second) {
+    if (kv.second.size() > max_step_len) {
+      max_step_len = kv.second.size();
+    }
+    if (step_entries[kv.first].size() > max_step_ent_len) {
+      max_step_ent_len = step_entries[kv.first].size();
+    }
+  }
+  vector<vector<uint32_t>> groups;
+  /////////////////////////////////////////// Find node groups /////////////////////////////
+  for (size_t t = 0; t < max_step_len; ++t) {
+    vector<vector<uint32_t>> step_ex;
+    for (const auto& kv : steps) {
+      if (t >= kv.second.size()) continue;
+      vector<uint32_t> vec;
+      uint32_t nid = kv.second[t];
       CHECK(orignode_mapping_type_[nid] == MapType::kMapToNode)
         << origidx[nid].source->attrs.name;
+      LOG(INFO) << origidx[nid].source->attrs.name;
       const Node* newnode = nnvm::get<const Node*>(orignode_mappings_[nid]);
       node_mappings_.at(newnode).DFSNodeVisit(
           [&] (const Node* orignode) {
-            ns.push_back(origidx.node_id(orignode));
+            vec.push_back(origidx.node_id(orignode));
           });
+      step_ex.push_back(vec);
     }
-    for (uint32_t eid : step_entries[kv.first]) {
+    LOG(INFO) << "At t=" << t;
+    if (step_ex.empty()) continue;
+    // sanity check
+    for (const auto& vec : step_ex) CHECK_EQ(vec.size(), step_ex[0].size());
+    for (size_t tt = 0; tt < step_ex[0].size(); ++tt) {
+      uint32_t anchor = step_ex[0][tt];
+      vector<uint32_t> group;
+      for (const auto& vec : step_ex) {
+        uint32_t nid = vec[tt];
+        group.push_back(nid);
+      }
+      groups.push_back(group);
+    }
+  }
+  /////////////////////////////////////////// Find entry groups /////////////////////////////
+  for (size_t t = 0; t < max_step_ent_len; ++t) {
+    vector<vector<uint32_t>> step_ex;
+    for (const auto& kv : step_entries) {
+      if (t >= kv.second.size()) continue;
+      uint32_t eid = kv.second[t];
+      LOG(INFO) << "Eid#" << eid;
       if (origentry_mapping_type_[eid] == MapType::kMapToEntry) {
+        vector<uint32_t> vec;
         const auto& newent = nnvm::get<IndexedGraph::NodeEntry>(origentry_mappings_[eid]);
         entry_mappings_.at(idx[newent.node_id].source).at(newent.index)
           .DFSNodeVisit([&] (const Node* orignode) {
-                ns.push_back(origidx.node_id(orignode));
+                vec.push_back(origidx.node_id(orignode));
               });
+        // XXX(minjie): This is a dangerous skip.
+        if (!vec.empty()) step_ex.push_back(vec);
       }
     }
-    //LOG(INFO) << kv.first << " " << ns.size();
-    if (ns.size() > max_step_len) {
-      max_step_len = ns.size();
+    LOG(INFO) << "At t=" << t << " " << step_ex.size();
+    if (step_ex.empty()) continue;
+    // sanity check
+    for (const auto& vec : step_ex) CHECK_EQ(vec.size(), step_ex[0].size());
+    for (size_t tt = 0; tt < step_ex[0].size(); ++tt) {
+      uint32_t anchor = step_ex[0][tt];
+      vector<uint32_t> group;
+      for (const auto& vec : step_ex) {
+        uint32_t nid = vec[tt];
+        group.push_back(nid);
+      }
+      groups.push_back(group);
     }
-    step_with_bp.push_back(std::move(ns));
   }
-  const size_t num_steps = step_with_bp.size();
   // 3. Build equals
-  for (size_t t = 0; t < max_step_len; ++t) {
-    uint32_t anchor = origidx.num_nodes();
-    for (size_t s = 0; s < num_steps; ++s) {
-      // NOTE: not all the RNN steps are identical to each other. For example, the hidden
-      // state of the last step will no longer be fed to another step. Here we only merge
-      // nodes that are available to the steps.
-      if (t < step_with_bp[s].size()) {
-        anchor = step_with_bp[s][t];
-        break;
-      }
-    }
-    CHECK(anchor < origidx.num_nodes());
+  for (const auto& g : groups) {
+    uint32_t anchor = g[0];
     const Node* anode = origidx[anchor].source;
-    for (size_t s = 1; s < num_steps; ++s) {
-      if (t >= step_with_bp[s].size()) {
-        // NOTE: not all the RNN steps are identical to each other. For example, the hidden
-        // state of the last step will no longer be fed to another step. Here we only merge
-        // nodes that are available to the steps.
-        continue;
-      }
-      uint32_t nid = step_with_bp[s][t];
+    for (uint32_t nid : g) {
       const Node* n = origidx[nid].source;
       CHECK((anode->is_variable() && n->is_variable()) || anode->op() == n->op())
         << anode->attrs.name << " v.s. " << n->attrs.name;
@@ -861,6 +899,80 @@ void MegaGraph::MergeRNNSteps() {
       }
     }
   }
+
+  //vector<vector<uint32_t>> step_with_bp;
+  //size_t max_step_len = 0;
+  //for (const auto& kv : steps) {
+  //  unordered_set<uint32_t> ns;
+  //  for (uint32_t nid : kv.second) {
+  //    CHECK(orignode_mapping_type_[nid] == MapType::kMapToNode)
+  //      << origidx[nid].source->attrs.name;
+  //    const Node* newnode = nnvm::get<const Node*>(orignode_mappings_[nid]);
+  //    node_mappings_.at(newnode).DFSNodeVisit(
+  //        [&] (const Node* orignode) {
+  //          ns.insert(origidx.node_id(orignode));
+  //        });
+  //  }
+  //  for (uint32_t eid : step_entries[kv.first]) {
+  //    if (origentry_mapping_type_[eid] == MapType::kMapToEntry) {
+  //      const auto& newent = nnvm::get<IndexedGraph::NodeEntry>(origentry_mappings_[eid]);
+  //      entry_mappings_.at(idx[newent.node_id].source).at(newent.index)
+  //        .DFSNodeVisit([&] (const Node* orignode) {
+  //              ns.insert(origidx.node_id(orignode));
+  //            });
+  //    }
+  //  }
+  //  vector<uint32_t> ns_vec(ns.begin(), ns.end());
+  //  std::sort(ns_vec.begin(), ns_vec.end());
+  //  LOG(INFO) << kv.first << " " << ns_vec.size();
+  //  for (uint32_t nid : ns_vec) {
+  //    LOG(INFO) << "\t" << origidx[nid].source->attrs.name;
+  //  }
+  //  if (ns_vec.size() > max_step_len) {
+  //    max_step_len = ns_vec.size();
+  //  }
+  //  step_with_bp.push_back(std::move(ns_vec));
+  //}
+  //// 3. Build equals
+  //for (size_t t = 0; t < max_step_len; ++t) {
+  //  uint32_t anchor = origidx.num_nodes();
+  //  for (size_t s = 0; s < num_steps; ++s) {
+  //    // NOTE: not all the RNN steps are identical to each other. For example, the hidden
+  //    // state of the last step will no longer be fed to another step. Here we only merge
+  //    // nodes that are available to the steps.
+  //    if (t < step_with_bp[s].size()) {
+  //      anchor = step_with_bp[s][t];
+  //      break;
+  //    }
+  //  }
+  //  CHECK(anchor < origidx.num_nodes());
+  //  const Node* anode = origidx[anchor].source;
+  //  for (size_t s = 1; s < num_steps; ++s) {
+  //    if (t >= step_with_bp[s].size()) {
+  //      // NOTE: not all the RNN steps are identical to each other. For example, the hidden
+  //      // state of the last step will no longer be fed to another step. Here we only merge
+  //      // nodes that are available to the steps.
+  //      continue;
+  //    }
+  //    uint32_t nid = step_with_bp[s][t];
+  //    const Node* n = origidx[nid].source;
+  //    CHECK((anode->is_variable() && n->is_variable()) || anode->op() == n->op())
+  //      << anode->attrs.name << " v.s. " << n->attrs.name;
+  //    node_equals_.push_back(std::make_pair(anchor, nid));
+  //    CHECK(anode->num_outputs() == n->num_outputs());
+  //    CHECK(anode->inputs.size() == n->inputs.size());
+  //    for (uint32_t i = 0; i < n->inputs.size(); ++i) {
+  //      uint32_t eid1 = origidx.entry_id(anode->inputs[i]);
+  //      uint32_t eid2 = origidx.entry_id(n->inputs[i]);
+  //      entry_equals_.push_back({eid1, eid2});
+  //    }
+  //    for (uint32_t i = 0; i < n->num_outputs(); ++i) {
+  //      uint32_t eid1 = origidx.entry_id(anchor, i);
+  //      uint32_t eid2 = origidx.entry_id(nid, i);
+  //      entry_equals_.push_back({eid1, eid2});
+  //    }
+  //  }
+  //}
 }
   
 vector<uint32_t> MegaGraph::GetMegaNodeGroup(uint32_t node_id) const {

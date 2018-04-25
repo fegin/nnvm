@@ -406,7 +406,7 @@ void GraphPartitioner::FuseConvertGrid(const Grid& from, Grid* to) {
     std::vector<NodeEntry> blkroot;
     std::vector<const Node*> seq;
     DFSVisitWithRoot({toblk.entry.node.get()}, root,
-        [&] (const Node* node) {
+        [&] (const Node* node, const unordered_set<uint32_t>& oidx) {
           for (const auto& inent : node->inputs) {
             if (root.count(inent.node.get())) {
               blkroot.push_back(inent);
@@ -441,11 +441,9 @@ void GraphPartitioner::FuseConvertGrid(const Grid& from, Grid* to) {
 void GraphPartitioner::PerformOp(const vector<const Grid*>& inputs,
                                  const vector<Grid*>& outputs,
                                  const vector<NodePtr>& nodes) {
-  CHECK(!inputs.empty());
   // Sub-operators can simply fetch blocks under the same devices
   // since all required data should be fetched to locally already.
   const uint32_t num_devices = nodes.size();
-  // TODO(minjie): NodeEntry version?
   for (uint32_t dev = 0; dev < num_devices; ++dev) {
     nodes[dev]->inputs.resize(inputs.size());
     for (uint32_t i = 0; i < inputs.size(); ++i) {

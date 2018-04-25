@@ -379,39 +379,58 @@ void PostOrderDFSVisitWithRoot(
   for (auto& head : heads) {
     all_head_hash.insert(hash(head));
   }
-  std::vector<std::pair<GNode, uint32_t> > stack;
+  std::vector<std::tuple<GNode, uint32_t, uint32_t> > stack;
   std::unordered_map<HashType, bool> visited;
+
+  std::vector<GNode> order;
+  std::unordered_map<HashType, std::unordered_set<uint32_t> > visited_ports;
+
   for (auto& head : heads) {
     HashType head_hash = hash(head);
-    if (visited.count(head_hash) == 0) {
-      stack.push_back(std::make_pair(head, 0));
+    if (visited.count(head_hash) == 0 && !isroot(head)) {
+      stack.push_back(std::make_tuple(head, 0, 0));
       visited.insert(std::make_pair(head_hash, false));
     }
     while (!stack.empty()) {
-      std::pair<GNode, uint32_t>& back = stack.back();
-      if (back.second == indegree(back.first)) {
-        if (all_head_hash.count(hash(back.first))
-           || visited.at(back.first)) {
-          fvisit(back.first);
+      std::tuple<GNode, uint32_t, uint32_t>& back = stack.back();
+      const GNode& node = std::get<0>(back);
+      if (std::get<1>(back) == indegree(node)) {
+        if (all_head_hash.count(hash(node)) || visited.at(node)) {
+          //fvisit(std::get<0>(back));
+          order.push_back(node);
+          visited_ports[hash(node)].insert(std::get<2>(back));
         }
         stack.pop_back();
       } else {
-        const GNode& input = getinput(back.first, back.second++);
+        const auto& pair = getinput(std::get<0>(back), std::get<1>(back)++);
+        const GNode& input = pair.first;
+        uint32_t port = pair.second;
         HashType input_hash = hash(input);
         if (all_head_hash.count(input_hash)) {
           // Found head nodes, stop.
         } else if (isroot(input)) {
-          // Found root nodes, stop.
+          // Found root nodes, stop and color the path.
           for (auto& t : stack) {
-            visited.at(t.first) = true;
+            visited.at(std::get<0>(t)) = true;
           }
         } else if (visited.count(input_hash) == 0) {
           // Continue search.
-          stack.push_back(std::make_pair(input, 0));
+          stack.push_back(std::make_tuple(input, 0, port));
           visited.insert(std::make_pair(input_hash, false));
+        } else if (visited.at(input_hash) == true) {
+          // Found nodes that can connect to root nodes.
+          // Save the visited port.
+          visited_ports.at(input_hash).insert(port);
+          for (auto& t : stack) {
+            visited.at(std::get<0>(t)) = true;
+          }
         }
       }
     }
+  }
+
+  for (const GNode& node : order) {
+    fvisit(node, visited_ports.at(hash(node)));
   }
 }
 
@@ -423,13 +442,14 @@ inline void DFSVisitWithRoot(
   typedef const Node* GNode;
   PostOrderDFSVisitWithRoot<GNode, const Node*>(
       head_nodes,
-      [fvisit](GNode n) { fvisit(n); },  // FVisit
+      fvisit,
       [](GNode n) { return n; },  // HashFunc
       [](GNode n)->uint32_t {  // InDegree
         return n->inputs.size();
       },
-      [](GNode n, uint32_t index)->GNode {  // GetInput
-        return n->inputs.at(index).node.get();
+      [](GNode n, uint32_t index) {  // GetInput
+        const auto& ent = n->inputs.at(index);
+        return std::make_pair(ent.node.get(), ent.index);
       },
       [&root](GNode n)->bool { return root.count(n); });
 }
@@ -458,10 +478,12 @@ class GraphView {
     CHECK(idx.has_node(node));
     CHECK(node->num_outputs() != 0);
     uint32_t nid = idx.node_id(node);
-    if (!node->inputs.empty()) {
-      start_entries_.push_back(idx[nid].inputs[0]);
+    for (const auto& inent : idx[nid].inputs) {
+      start_entries_.push_back(inent);
     }
-    end_entries_.push_back(IndexedGraph::NodeEntry{nid, 0, 0});
+    for (uint32_t i = 0; i < idx[nid].source->num_outputs(); ++i) {
+      end_entries_.push_back(IndexedGraph::NodeEntry{nid, i, 0});
+    }
     BuildSet();
   }
 

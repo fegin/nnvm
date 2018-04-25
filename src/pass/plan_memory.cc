@@ -230,7 +230,7 @@ Graph PlanMemoryGraphColoring(Graph ret) {
   // number of entries that are not statically allocated.
   size_t num_not_allocated = 0;
 
-  LOG(INFO) << "#Nodes=" << idx.num_nodes();
+  LOG(INFO) << "#Nodes=" << idx.num_nodes() << " #Entries=" << idx.num_node_entries();
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     const auto& inode = idx[nid];
     //LOG(INFO) << "Plan for node#" << nid << " " << inode.source->attrs.name;
@@ -332,6 +332,7 @@ Graph PlanMemoryGraphColoring(Graph ret) {
   LOG(INFO) << "Total allocated bytes(device#3): " << allocator.TotalAllocBytesDevice(3);
   LOG(INFO) << "Total bad alloc bytes: " << bad_alloc_bytes;
   LOG(INFO) << "Total extern alloc bytes: " << extern_alloc_bytes;
+  LOG(INFO) << "Total memory buckets: " << storage2entry.size() - 2;
 
   ret.attrs["storage_id"] = std::make_shared<any>(std::move(storage));
   ret.attrs["storage_inplace_index"] = std::make_shared<any>(std::move(storage_inplace_index));

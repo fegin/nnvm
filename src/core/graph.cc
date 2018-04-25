@@ -124,15 +124,15 @@ std::ostream& operator << (std::ostream& os, const GraphView& gv) {
     os << idx[ent.node_id].source->attrs.name << "#" << ent.index << " ";
   }
   os << "] nodes=[";
-  for (const auto& n : gv.node_ids_) {
-    os << idx[n.first].source->attrs.name << " ";
-  }
+  gv.DFSNodeVisit([&] (const Node* node) {
+        os << node->attrs.name << " ";
+      });
   os << "] entries=[";
-  for (const auto& n : gv.node_ids_) {
-    for (const auto& i : n.second) {
-      os << idx[n.first].source->attrs.name << "#" << i << " ";
-    }
-  }
+  gv.DFSEntryVisit([&] (const Node* node, vector<uint32_t> oidx) {
+        for (uint32_t i : oidx) {
+          os << node->attrs.name << "#" << i << " ";
+        }
+      }, GraphView::VisitOption::kNoStart);
   return os << "]";
 }
 
@@ -191,19 +191,25 @@ void GraphView::BuildSet() {
   for (const auto& e : end_entries_) end_set_.insert(idx.entry_id(e));
 
   node_ids_.clear();
+  node_hashes_.clear();
+  unordered_map<const Node*, unordered_set<uint32_t>> node2idx;
 
   vector<const Node*> heads;
   unordered_set<const Node*> roots;
   for (const auto& e : end_entries_) {
-    heads.push_back(idx[e.node_id].source);
+    const Node* n = idx[e.node_id].source;
+    heads.push_back(n);
+    node2idx[n].insert(e.index);
   }
   for (const auto& e : start_entries_) {
-    roots.insert(idx[e.node_id].source);
+    const Node* n = idx[e.node_id].source;
+    roots.insert(n);
+    node2idx[n].insert(e.index);
   }
   DFSVisitWithRoot(heads, roots,
-      [&] (const Node* node) {
-        uint32_t nid = idx.node_id(node);
-        vector<uint32_t> oidx;
+      [&] (const Node* node, unordered_set<uint32_t> visited_oidx) {
+        /*uint32_t nid = idx.node_id(node);
+        vector<uint32_t> odix;
         for (uint32_t i = 0; i < node->num_outputs(); ++i) {
           for (const auto& e : end_entries_) {
             if ((nid == e.node_id && i == e.index)
@@ -212,10 +218,19 @@ void GraphView::BuildSet() {
               break;
             }
           }
+        }*/
+        for (uint32_t i : visited_oidx) {
+          //LOG(INFO) << "-------> " << node->attrs.name << "#" << i;
+          node2idx[node].insert(i);
         }
-        node_ids_.push_back(std::make_pair(nid, oidx));
-        node_hashes_.insert(nid);
       });
+  for (const auto& kv : node2idx) {
+    const uint32_t nid = idx.node_id(kv.first);
+    vector<uint32_t> oidx(kv.second.begin(), kv.second.end());
+    std::sort(oidx.begin(), oidx.end());
+    node_ids_.push_back(std::make_pair(nid, oidx));
+    node_hashes_.insert(nid);
+  }
   std::sort(node_ids_.begin(), node_ids_.end(),
       [] (const pair<uint32_t, vector<uint32_t>>& n1,
           const pair<uint32_t, vector<uint32_t>>& n2)->bool {
