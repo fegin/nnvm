@@ -125,8 +125,12 @@ Graph PlaceDevice(Graph src) {
       << "Need graph attribute \"device_copy_op\" in PlaceDevice";
   const string& device_group_attr_key = src.GetAttr<string>("device_group_attr_key");
   const Op* copy_op = Op::Get(src.GetAttr<string>("device_copy_op"));
-  const Op* tofu_fused_convert_op = Op::Get("_TofuFusedConvert");
-  const std::unordered_set<const Op*> mem_op = {copy_op, tofu_fused_convert_op};
+  const std::unordered_set<const Op*> mem_op = {
+    copy_op,
+    Op::Get("_TofuFusedConvert"),
+    Op::Get("_TofuFusedConvertNoComm"),
+    Op::Get("_TofuCachedCopy"),
+  };
   auto& device_assign_map = src.GetAttr<DeviceAssignMap>("device_assign_map");
   const IndexedGraph& idx = src.indexed_graph();
   DeviceVector device;
