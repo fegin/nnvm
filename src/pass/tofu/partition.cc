@@ -11,6 +11,7 @@
 #include <nnvm/symbolic.h>
 
 #include "./utils.h"
+#include "./geometry.h"
 
 using namespace std;
 
@@ -397,6 +398,7 @@ void GraphPartitioner::ConvertGrid(const Grid& from, Grid* to) {
 }
 
 void GraphPartitioner::FuseConvertGrid(const Grid& from, Grid* to) {
+  const Op* split_op = Op::Get("_backward_Concat");
   std::unordered_set<const Node*> root;
   for (size_t i = 0; i < from.TotalNumBlocks(); ++i) {
     root.insert(from.BlockAt(i).entry.node.get());
@@ -404,31 +406,48 @@ void GraphPartitioner::FuseConvertGrid(const Grid& from, Grid* to) {
   for (size_t i = 0; i < to->TotalNumBlocks(); ++i) {
     auto& toblk = to->BlockAt(i);
     std::vector<NodeEntry> blkroot;
-    std::vector<const Node*> seq;
+    std::unordered_map<const Node*, std::unordered_map<const Node*, Region>> node2region;
     DFSVisitWithRoot({toblk.entry.node.get()}, root,
         [&] (const Node* node, const unordered_set<uint32_t>& oidx) {
+          std::unordered_map<const Node*, Region> inreg;
           for (const auto& inent : node->inputs) {
-            if (root.count(inent.node.get())) {
+            const Node* innode = inent.node.get();
+            if (root.count(innode)) {
               blkroot.push_back(inent);
+              inreg[innode] = Region(from.block_shape());
+            } else if (innode->op() == split_op) {
+              int num_args = std::stoi(innode->attrs.dict.at("num_args"));
+              int dim = std::stoi(innode->attrs.dict.at("dim"));
+              CHECK(node2region.at(innode).size() == 1);
+              for (const auto& kv : node2region.at(innode)) {
+                inreg[kv.first] = kv.second.Split(Scheme::Cut(dim), num_args).at(inent.index);
+              }
+            } else {
+              for (const auto& kv : node2region.at(innode)) {
+                inreg[kv.first] = kv.second;
+              }
             }
           }
-          seq.push_back(node);
+          node2region[node] = std::move(inreg);
         });
     //LOG(INFO) << "#Root blks: " << blkroot.size();
     //LOG(INFO) << "Fused: [";
-    //for (Node* n : seq) {
-      //LOG(INFO) << "\t" << n->attrs.op->name;
-    //}
     //LOG(INFO) << "]";
-    const Op* fused_convert_op = Op::Get("_TofuFusedConvert");
+    const auto& dep_regions = node2region.at(toblk.entry.node.get());
+    std::vector<TShape> offsets, sizes;
+    for (const auto& br : blkroot) {
+      offsets.push_back(dep_regions.at(br.node.get()).offset());
+      sizes.push_back(dep_regions.at(br.node.get()).shape());
+    }
     // Fused op name.
     ostringstream oss;
     oss << "_TOFU_CONVERT";
     NodePtr node = Node::Create();
     // all input entries
     node->inputs = std::move(blkroot);
-    node->attrs.op = fused_convert_op;
+    node->attrs.op = tofu_fused_convert_op_;
     node->attrs.name = oss.str();
+    node->attrs.parsed = std::make_pair(offsets, sizes);
     //node->attrs.dict["num_args"] = std::to_string(node->inputs.size());
     AssignDevice(node, DevName(toblk.device_group_id));
     FinalizeNodeCreation(node);

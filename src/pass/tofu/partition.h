@@ -29,6 +29,7 @@ class GraphPartitioner {
     tiling_(tiling), src_graph_(src), num_devices_(num_devices) {
     comm_planner_ = CommPlanner::CreatePlanner(comm_name);
     copy_op_ = Op::Get("_CrossDeviceCopy");
+    tofu_fused_convert_op_ = Op::Get("_TofuFusedConvert");
   }
 
   void SetOversharding(bool flag) {
@@ -45,6 +46,10 @@ class GraphPartitioner {
 
   void SetCopyOp(const Op* copy_op) {
     copy_op_ = copy_op;
+  }
+
+  void SetFusedConvertOp(const Op* op) {
+    tofu_fused_convert_op_ = op;
   }
 
   Graph Run();
@@ -120,6 +125,7 @@ class GraphPartitioner {
   bool use_fused_conversion_{false};
   std::string default_group_;
   const Op* copy_op_ = nullptr;
+  const Op* tofu_fused_convert_op_ = nullptr;
 
   std::unordered_map<NodePtr, std::vector<TShape>> node_output_shapes_;
 };

@@ -50,6 +50,33 @@ pair<Region, Region> Region::Split2(const Scheme& sch) const {
   return pair<Region, Region>();
 }
   
+std::vector<Region> Region::Split(const Scheme& sch, size_t k) const {
+  switch (sch.type) {
+  case Scheme::kCut:
+    {
+    TShape shp = region_shape_;
+    CHECK_LT(sch.dim, region_shape_.ndim());
+    CHECK(shp[sch.dim] % k == 0) << "Dimension " << sch.dim << " of size "
+      << shp[sch.dim] << " cannot be splitted into " << k << ".";
+    shp[sch.dim] /= k;
+    std::vector<Region> ret;
+    for (size_t i = 0; i < k; ++i) {
+      TShape offset = region_offset_;
+      offset[sch.dim] += shp[sch.dim] * i;
+      ret.emplace_back(entry_shape_, offset, shp);
+    }
+    return ret;
+    }
+  case Scheme::kRep:
+    {
+    return std::vector<Region>(k, *this);
+    }
+  default:
+    LOG(FATAL) << "Scheme: " << sch << " is not supported for split.";
+  }
+  return {};
+}
+
 cost_t Region::IntersectArea(const Region& r1, const Region& r2) {
   const TShape& r1_end = r1.offset() + r1.shape();
   const TShape& r2_end = r2.offset() + r2.shape();

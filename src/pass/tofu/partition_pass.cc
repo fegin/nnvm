@@ -69,6 +69,7 @@ Graph PartitionPass(Graph src) {
   const string& tiling_type = dmlc::GetEnv("TOFU_TILING_TYPE", string("kcuts"));
   const int oversharding = dmlc::GetEnv("TOFU_OVERSHARDING", 0);
   const int fused_conversion = dmlc::GetEnv("TOFU_FUSED_CONVERSION", 0);
+  const int ignore_gpu_comm = dmlc::GetEnv("TOFU_IGNORE_GPU_COMM", 0);
   const int use_bfs = dmlc::GetEnv("TOFU_USE_BFS_LEVEL", 0);
 
   const int num_devices = src.GetAttr<int>("num_devices");
@@ -149,6 +150,9 @@ Graph PartitionPass(Graph src) {
   pttn.SetDefaultGraph(default_group);
   pttn.SetUseFusedConversion(fused_conversion);
   pttn.SetCopyOp(Op::Get(copy_op_name));
+  if (ignore_gpu_comm) {
+    pttn.SetFusedConvertOp(Op::Get("_TofuFusedConvertNoComm"));
+  }
 
   const Graph& ret = pttn.Run();
 

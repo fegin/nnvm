@@ -234,6 +234,8 @@ Graph PlanMemoryGraphColoring(Graph ret) {
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     const auto& inode = idx[nid];
     //LOG(INFO) << "Plan for node#" << nid << " " << inode.source->attrs.name;
+    if (utils::StartsWith(inode.source->attrs.name, "_TOFU")) {
+    }
     if (inode.source->is_variable()) continue;
     // check inplace option
     if (finplace_option.count(inode.source->op()) != 0) {

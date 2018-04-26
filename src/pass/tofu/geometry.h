@@ -39,6 +39,9 @@ class Region {
   // Partition this region into two sub-regions.
   std::pair<Region, Region> Split2(const Scheme& sch) const;
 
+  // Partition this region into subregions.
+  std::vector<Region> Split(const Scheme& sch, size_t k) const;
+
   // Return true if the region could be splitted using the given scheme.
   bool CanSplit2(const Scheme& sch) const;
 
