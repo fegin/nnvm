@@ -317,7 +317,7 @@ void GraphPartitioner::AllReduce(const Grid& input, Grid* output) {
   } while(iter.Next());
 }
 
-void GraphPartitioner::ConvertGrid(const Grid& from, Grid* to) {
+void GraphPartitioner::ConvertGrid(const Grid& from, Grid* to, bool input_or_output) {
   CHECK_EQ(from.shape(), to->shape());
   CHECK(!to->replicate_is_reduction());
   if (from.num_blocks() == to->num_blocks() &&
@@ -393,11 +393,11 @@ void GraphPartitioner::ConvertGrid(const Grid& from, Grid* to) {
   }
 
   if (use_fused_conversion_) {
-    FuseConvertGrid(from, to);
+    FuseConvertGrid(from, to, input_or_output);
   }
 }
 
-void GraphPartitioner::FuseConvertGrid(const Grid& from, Grid* to) {
+void GraphPartitioner::FuseConvertGrid(const Grid& from, Grid* to, bool input_or_output) {
   const Op* split_op = Op::Get("_backward_Concat");
   std::unordered_set<const Node*> root;
   for (size_t i = 0; i < from.TotalNumBlocks(); ++i) {
@@ -447,8 +447,7 @@ void GraphPartitioner::FuseConvertGrid(const Grid& from, Grid* to) {
     node->inputs = std::move(blkroot);
     node->attrs.op = tofu_fused_convert_op_;
     node->attrs.name = oss.str();
-    node->attrs.parsed = std::make_pair(offsets, sizes);
-    //node->attrs.dict["num_args"] = std::to_string(node->inputs.size());
+    node->attrs.parsed = TofuConvertParam{offsets, sizes, input_or_output};
     AssignDevice(node, DevName(toblk.device_group_id));
     FinalizeNodeCreation(node);
     toblk.entry = NodeEntry{node, 0, 0};
@@ -537,15 +536,18 @@ NodeEntry GraphPartitioner::ConcatVariableGrid(
   if (fake_var_split_concat) {
     NodePtr fake_out_node = Node::Create();
     // TODO(minjie): should be zero node.
-    fake_out_node->attrs.op = Op::Get("_NoGradient");
+    fake_out_node->attrs.op = Op::Get("_TofuFakeOut");
     fake_out_node->attrs.name = original_entry.node->attrs.name;
     FinalizeNodeCreation(fake_out_node);
     CHECK(node_output_shapes_[fake_out_node].empty());
     node_output_shapes_[fake_out_node].push_back(from_grid.shape());
+    std::vector<uint32_t> dep_ent_idx;
     for (size_t i = 0; i < from_grid.TotalNumBlocks(); ++i) {
       // Add control dependencies.
       fake_out_node->control_deps.push_back(from_grid.BlockAt(i).entry.node);
+      dep_ent_idx.push_back(from_grid.BlockAt(i).entry.index);
     }
+    fake_out_node->attrs.parsed = dep_ent_idx;
     AssignDefaultGroup(fake_out_node);  // The fake node is assigned to the default group.
     return NodeEntry{fake_out_node, 0, 0};
   } else {
@@ -724,7 +726,7 @@ Graph GraphPartitioner::Run() {
       const Grid& ingrid = entry_grids[in_ent_id];
       Grid& aligned = op_input_grids[nodeid][i];
       //LOG(INFO) << "\tConvert input #" << i;
-      ConvertGrid(ingrid, &aligned);
+      ConvertGrid(ingrid, &aligned, true);
       aligned_ingrid[i] = &aligned;
     }
     vector<Grid*> outgrid(node->num_outputs());
@@ -741,7 +743,7 @@ Graph GraphPartitioner::Run() {
     // Convert output grids.
     for (size_t i = 0; i < node->num_outputs(); ++i) {
       //LOG(INFO) << "\tConvert output #" << i;
-      ConvertGrid(*aligned_outgrid[i], outgrid[i]);
+      ConvertGrid(*aligned_outgrid[i], outgrid[i], false);
     }
   });
 

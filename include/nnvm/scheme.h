@@ -65,6 +65,11 @@ inline bool operator != (const Scheme& s1, const Scheme& s2) {
   return !(s1 == s2);
 }
 
+struct TofuConvertParam {
+  std::vector<TShape> offsets, sizes;
+  bool input_or_output;
+};
+
 }  // namespace pass
 }  // namespace nnvm
 

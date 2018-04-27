@@ -91,7 +91,7 @@ class GraphPartitioner {
 
   // Create conversion operations between two grids. The conversion happens in three
   // phases: split; allreduce/shuffle; concat.
-  void ConvertGrid(const Grid& from, Grid* to);
+  void ConvertGrid(const Grid& from, Grid* to, bool input_or_output);
 
   // Create conversion operations between two grids. The conversion
   // uses an operator that fuses split, allreduce/shuffle and
@@ -101,7 +101,7 @@ class GraphPartitioner {
   // from other GPUs.
   // Note: can only be enabled on single-machine-multi-GPUs and when
   //       UVA is supported.
-  void FuseConvertGrid(const Grid& from, Grid* to);
+  void FuseConvertGrid(const Grid& from, Grid* to, bool input_or_output);
 
   // Connect the input grids and output grids by operators. It follows the idea of
   // recursive-partitionable operator.
