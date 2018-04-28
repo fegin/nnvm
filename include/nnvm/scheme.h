@@ -68,6 +68,8 @@ inline bool operator != (const Scheme& s1, const Scheme& s2) {
 struct TofuConvertParam {
   std::vector<TShape> offsets, sizes;
   bool input_or_output;
+  bool is_reduction;
+  bool ignore_reduction;
 };
 
 }  // namespace pass

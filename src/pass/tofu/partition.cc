@@ -399,6 +399,7 @@ void GraphPartitioner::ConvertGrid(const Grid& from, Grid* to, bool input_or_out
 
 void GraphPartitioner::FuseConvertGrid(const Grid& from, Grid* to, bool input_or_output) {
   const Op* split_op = Op::Get("_backward_Concat");
+  const Op* sum_op = Op::Get("ElementWiseSum");
   std::unordered_set<const Node*> root;
   for (size_t i = 0; i < from.TotalNumBlocks(); ++i) {
     root.insert(from.BlockAt(i).entry.node.get());
@@ -407,6 +408,7 @@ void GraphPartitioner::FuseConvertGrid(const Grid& from, Grid* to, bool input_or
     auto& toblk = to->BlockAt(i);
     std::vector<NodeEntry> blkroot;
     std::unordered_map<const Node*, std::unordered_map<const Node*, Region>> node2region;
+    bool is_reduction = false;
     DFSVisitWithRoot({toblk.entry.node.get()}, root,
         [&] (const Node* node, const unordered_set<uint32_t>& oidx) {
           std::unordered_map<const Node*, Region> inreg;
@@ -428,6 +430,9 @@ void GraphPartitioner::FuseConvertGrid(const Grid& from, Grid* to, bool input_or
               }
             }
           }
+          if (node->op() == sum_op) {
+            is_reduction = true;
+          }
           node2region[node] = std::move(inreg);
         });
     //LOG(INFO) << "#Root blks: " << blkroot.size();
@@ -447,7 +452,8 @@ void GraphPartitioner::FuseConvertGrid(const Grid& from, Grid* to, bool input_or
     node->inputs = std::move(blkroot);
     node->attrs.op = tofu_fused_convert_op_;
     node->attrs.name = oss.str();
-    node->attrs.parsed = TofuConvertParam{offsets, sizes, input_or_output};
+    node->attrs.parsed = TofuConvertParam{
+      offsets, sizes, input_or_output, is_reduction, false};
     AssignDevice(node, DevName(toblk.device_group_id));
     FinalizeNodeCreation(node);
     toblk.entry = NodeEntry{node, 0, 0};
@@ -533,6 +539,7 @@ NodeEntry GraphPartitioner::ConcatVariableGrid(
     const NodeEntry& original_entry,
     const Grid& from_grid) {
   const int fake_var_split_concat = dmlc::GetEnv("TOFU_FAKE_VAR_SPLIT_CONCAT", 0);
+  const int tofu_ignore_weight_reduction = dmlc::GetEnv("TOFU_IGNORE_WEIGHT_REDUCTION", 0);
   if (fake_var_split_concat) {
     NodePtr fake_out_node = Node::Create();
     // TODO(minjie): should be zero node.
@@ -544,8 +551,16 @@ NodeEntry GraphPartitioner::ConcatVariableGrid(
     std::vector<uint32_t> dep_ent_idx;
     for (size_t i = 0; i < from_grid.TotalNumBlocks(); ++i) {
       // Add control dependencies.
-      fake_out_node->control_deps.push_back(from_grid.BlockAt(i).entry.node);
-      dep_ent_idx.push_back(from_grid.BlockAt(i).entry.index);
+      const auto& from_ent = from_grid.BlockAt(i).entry;
+      fake_out_node->control_deps.push_back(from_ent.node);
+      dep_ent_idx.push_back(from_ent.index);
+      if (tofu_ignore_weight_reduction) {
+        if (from_ent.node->op() == tofu_fused_convert_op_) {
+          auto param = nnvm::get<TofuConvertParam>(from_ent.node->attrs.parsed);
+          param.ignore_reduction = true;
+          from_ent.node->attrs.parsed = param;
+        }
+      }
     }
     fake_out_node->attrs.parsed = dep_ent_idx;
     AssignDefaultGroup(fake_out_node);  // The fake node is assigned to the default group.
