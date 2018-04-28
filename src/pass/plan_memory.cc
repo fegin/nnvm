@@ -240,14 +240,14 @@ Graph PlanMemoryGraphColoring(Graph ret) {
       // of data that are distributed across devices. Its inputs cannot be freed.
       const Node* node = inode.source;
       CHECK_EQ(node->num_outputs(), 1);
-      uint32_t eid = idx.entry_id(nid, 0);
       const auto& dep_ent_idx = nnvm::get<std::vector<uint32_t>>(node->attrs.parsed);
       CHECK_EQ(dep_ent_idx.size(), node->control_deps.size());
       for (size_t i = 0; i < dep_ent_idx.size(); ++i) {
         uint32_t eid = idx.entry_id(idx.node_id(node->control_deps[i].get()), dep_ent_idx[i]);
         storage[eid] = GraphAllocator::kTofuPersistStorageID;
       }
-      storage[eid] = GraphAllocator::kExternalStorageID;
+      //uint32_t eid = idx.entry_id(nid, 0);
+      //storage[eid] = GraphAllocator::kExternalStorageID;
     }
   }
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {

@@ -73,6 +73,11 @@ void PlotGraph(Graph g, const DeviceVector& new_device_vec) {
       touched_nodes[nid] = true;
       touched_nodes[in.node_id] = true;
     }
+    for (uint32_t depnid : n.control_deps) {
+      cout << "\tn" << depnid << " -> n" << nid << endl;
+      touched_nodes[nid] = true;
+      touched_nodes[depnid] = true;
+    }
   }
   for (const auto& kv : dev2nodes ) {
     const int dev = kv.first;
