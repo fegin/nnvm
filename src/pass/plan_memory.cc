@@ -353,17 +353,17 @@ Graph PlanMemoryGraphColoring(Graph ret) {
   size_t temp_alloc_bytes = 0, persist_alloc_bytes = 0;
   std::vector<size_t> dev2bytes(100, 0);
   for (const auto& kv : storage2entry) {
-    LOG(INFO) << "Storage#" << kv.first << ": [";
+    //LOG(INFO) << "Storage#" << kv.first << ": [";
     size_t size_sum = 0;
     for (const auto& e : kv.second) {
-      LOG(INFO) << "\t" << idx[e.first].source->attrs.name << "#" << e.second;
+      //LOG(INFO) << "\t" << idx[e.first].source->attrs.name << "#" << e.second;
       const uint32_t eid = idx.entry_id(e.first, e.second);
       size_sum += shape_vec[eid].Size();
     }
     size_sum *= 4;
     size_t bytes = allocator.Bytes(kv.first);
     int dev = allocator.DeviceId(kv.first);
-    LOG(INFO) << "] bytes=" << bytes << " device=" << dev;
+    //LOG(INFO) << "] bytes=" << bytes << " device=" << dev;
     if (kv.first == GraphAllocator::kBadStorageID) {
       bad_alloc_bytes += size_sum;
     } else if (kv.first == GraphAllocator::kExternalStorageID) {
