@@ -730,6 +730,36 @@ void MegaGraph::MergeElementwise() {
   }
 }
 
+void MegaGraph::MergeActivationAndGradients() {
+  const auto& idx = graph_.indexed_graph();
+  const auto& origidx = orig_graph_->indexed_graph();
+  vector<vector<uint32_t>> groups;
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    const Node* node = idx[nid].source;
+    for (uint32_t i = 0; i < num_outputs_.at(node); ++i) {
+      vector<uint32_t> group;
+      entry_mappings_.at(node).at(i).DFSEntryVisit(
+          [&] (const Node* orignode, vector<uint32_t> oidx) {
+            uint32_t orignid = origidx.node_id(orignode);
+            for (uint32_t oi : oidx) {
+              uint32_t eid = origidx.entry_id(orignid, oi);
+              group.push_back(eid);
+            }
+          });
+      groups.push_back(group);
+    }
+  }
+
+  // Create entry equals.
+  for (const auto& g : groups) {
+    if (g.empty()) continue;
+    const uint32_t anchor = g[0];
+    for (size_t i = 1; i < g.size(); ++i) {
+      entry_equals_.push_back({anchor, g[i]});
+    }
+  }
+}
+
 void MegaGraph::MergeWeightAndGradients() {
   const auto& idx = graph_.indexed_graph();
   const auto& origidx = orig_graph_->indexed_graph();

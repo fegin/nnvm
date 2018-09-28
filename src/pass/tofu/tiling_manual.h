@@ -85,6 +85,29 @@ class UserTiling : public ManualTiling {
   std::vector<std::vector<Scheme>> entry_schemes_;
 };
 
+class AllRowTiling : public ManualTiling {
+ public:
+  AllRowTiling(Graph* src, const NodeEntryGroups& groups, size_t num_devices);
+  std::vector<Scheme> GetEntrySchemes(uint32_t entry_id) const override {
+    return entry_schemes_;
+  }
+  void Run() override {}
+
+ private:
+  std::vector<Scheme> entry_schemes_;
+};
+
+class AllRowAllFirstTiling : public ManualTiling {
+ public:
+  AllRowAllFirstTiling(Graph* src, const NodeEntryGroups& groups, size_t num_devices);
+  std::vector<Scheme> GetEntrySchemes(uint32_t entry_id) const override {
+    return entry_schemes_;
+  }
+  void Run() override {}
+
+ private:
+  std::vector<Scheme> entry_schemes_;
+};
 }  // namespace pass
 }  // namespace nnvm
 

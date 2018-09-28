@@ -177,6 +177,8 @@ class MegaGraph {
 
   void MergeRNNSteps();
 
+  void MergeActivationAndGradients();
+
   std::vector<uint32_t> GetMegaNodeGroup(uint32_t node_id) const;
 
   const std::vector<std::pair<uint32_t, uint32_t>>& entry_equals() const {

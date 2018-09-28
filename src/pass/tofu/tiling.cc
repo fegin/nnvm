@@ -19,16 +19,20 @@ unique_ptr<Tiling> Tiling::Create(
     return unique_ptr<Tiling>(new CutAlgorithm(graph, levels, eg, ng, num_devices));
   } else if (name == "k-equal-cuts") {
     return unique_ptr<Tiling>(new CutAlgorithm(graph, levels, eg, ng, num_devices, true));
-  //} else if (name == "datapar") {
-  //  return unique_ptr<Tiling>(new DataParallelism(graph, eg, ng, num_devices));
-  //} else if (name == "modelpar") {
-  //  return unique_ptr<Tiling>(new ModelParallelism(graph, eg, ng, num_devices));
-  //} else if (name == "hybridpar") {
-  //  return unique_ptr<Tiling>(new HybridParallelism(graph, eg, ng, num_devices));
-  //} else if (name == "spartan") {
-  //  return unique_ptr<Tiling>(new SpartanTiling(graph, eg, ng, num_devices));
-  //} else if (name == "usertiling") {
-  //  return unique_ptr<Tiling>(new UserTiling(graph, eg, ng, num_devices));
+  } else if (name == "datapar") {
+    return unique_ptr<Tiling>(new DataParallelism(graph, eg, num_devices));
+  } else if (name == "modelpar") {
+    return unique_ptr<Tiling>(new ModelParallelism(graph, eg, num_devices));
+  } else if (name == "hybridpar") {
+    return unique_ptr<Tiling>(new HybridParallelism(graph, eg, num_devices));
+  } else if (name == "spartan") {
+    return unique_ptr<Tiling>(new SpartanTiling(graph, eg, num_devices));
+  } else if (name == "usertiling") {
+    return unique_ptr<Tiling>(new UserTiling(graph, eg, num_devices));
+  } else if (name == "allrow") {
+    return unique_ptr<Tiling>(new AllRowTiling(graph, eg, num_devices));
+  } else if (name == "allrowallfirst") {
+    return unique_ptr<Tiling>(new AllRowAllFirstTiling(graph, eg, num_devices));
   } else {
     LOG(FATAL) << "Unknown tiling: " << name;
   }

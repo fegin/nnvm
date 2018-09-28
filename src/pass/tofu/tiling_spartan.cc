@@ -253,7 +253,12 @@ cost_t SpartanTiling::Decide(uint32_t nid) {
     const uint32_t in_eid = idx.entry_id(node->inputs[j]);
     if (entry_schemes_[in_eid].empty()) {
       const Scheme& sch = final_align.input_schemes[j];
-      entry_schemes_[in_eid] = vector<Scheme>(num_cuts_, sch);
+      if (sch.type == Scheme::kRep) {
+        // Replication will become row partition
+        entry_schemes_[in_eid] = vector<Scheme>(num_cuts_, Scheme::Cut(0));
+      } else {
+        entry_schemes_[in_eid] = vector<Scheme>(num_cuts_, sch);
+      }
     }
   }
   for (size_t j = 0; j < node->num_outputs(); ++j) {
@@ -261,7 +266,9 @@ cost_t SpartanTiling::Decide(uint32_t nid) {
     if (entry_schemes_[out_eid].empty()) {
       const Scheme& sch = final_align.output_schemes[j];
       if (sch.type == Scheme::kRed) {
-        entry_schemes_[out_eid] = vector<Scheme>(num_cuts_, Scheme::Rep());
+        //entry_schemes_[out_eid] = vector<Scheme>(num_cuts_, Scheme::Rep());
+        // Replication will become row partition
+        entry_schemes_[out_eid] = vector<Scheme>(num_cuts_, Scheme::Cut(0));
       } else {
         entry_schemes_[out_eid] = vector<Scheme>(num_cuts_, sch);
       }

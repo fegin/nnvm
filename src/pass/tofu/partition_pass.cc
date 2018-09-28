@@ -7,6 +7,7 @@
 #include <nnvm/op_attr_types.h>
 #include <nnvm/pass.h>
 #include <nnvm/pass_functions.h>
+#include <sys/time.h>
 
 #include "./partition.h"
 #include "./tiling.h"
@@ -94,17 +95,23 @@ Graph PartitionPass(Graph src) {
   //    equal.emplace_back(out_ent_id, fwd_ent_id);
   //  }
   //}
+  //vector<pair<uint32_t, uint32_t>> node_equal;
+  //NodeEntryGroups ent_groups(src, equal);
+  //NodeGroups node_groups(src, node_equal);
+  
+  timeval st, ed;
+  gettimeofday(&st, nullptr);
 
   MegaGraph mg(&src);
   //mg.Print();
   mg.MergeElementwise();
   mg.MergeWeightAndGradients();
   mg.MergeRNNSteps();
-
+  //mg.MergeActivationAndGradients();
   NodeEntryGroups ent_groups(src, mg.entry_equals());
-  ent_groups.Print();
+  //ent_groups.Print();
   NodeGroups node_groups(src, mg.node_equals());
-  node_groups.Print();
+  //node_groups.Print();
 
   // TODO(minjie): chaos ownership
   Levels* lvls = nullptr;
@@ -131,13 +138,17 @@ Graph PartitionPass(Graph src) {
       node_groups,
       num_devices);
   tiling->Run();
-  tiling->Print();
+  //tiling->Print();
   if (oversharding) {
     LOG(INFO) << "Oversharding enabled";
     //Tiling* overshard_tiling = new DataParallelism(&src, groups, 2);
     //tiling = new MergeTiling(&src, algo, overshard_tiling);
     LOG(FATAL) << "Disable for now";
   }
+
+  gettimeofday(&ed, nullptr);
+  const double time_use = (ed.tv_sec-st.tv_sec)*1000 + (ed.tv_usec-st.tv_usec) / 1000;
+  LOG(INFO) << "Optimization time: " << time_use;
   
   // Graph partitioner.
   CHECK_NOTNULL(tiling);

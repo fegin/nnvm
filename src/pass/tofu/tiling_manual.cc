@@ -341,5 +341,22 @@ HybridParallelism::HybridParallelism(Graph* src, const NodeEntryGroups& groups, 
   }
 }
 
+AllRowTiling::AllRowTiling(Graph* src, const NodeEntryGroups& groups, size_t num_devices):
+  ManualTiling(src, groups, num_devices) {
+  entry_schemes_ = vector<Scheme>(num_cuts_, Scheme::Cut(0));
+  this->ChooseSchemeRequests();
+}
+AllRowAllFirstTiling::AllRowAllFirstTiling(
+    Graph* src, const NodeEntryGroups& groups, size_t num_devices):
+  ManualTiling(src, groups, num_devices) {
+  entry_schemes_ = vector<Scheme>(num_cuts_, Scheme::Cut(0));
+  this->ChooseSchemeRequests();
+  // Rewrite everything choice to be the first request.
+  for (size_t i = 0; i < chosen_scheme_requests_.size(); ++i) {
+    auto& vec = chosen_scheme_requests_[i];
+    std::fill(vec.begin(), vec.end(), 0);
+  }
+}
+
 }  // namespace pass
 }  // namespace nnvm
